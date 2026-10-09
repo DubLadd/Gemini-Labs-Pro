@@ -1,0 +1,6 @@
+{
+  "name": "Google Labs OS Shell",
+  "description": "An interactive Web OS desktop shell featuring Google Labs experiments including ASCII Art Studio with WebRTC Peer-to-Peer Live Broadcast and MusicFX Audio Pulse, Google Flow Music AI Genre Studio, Playground Studio, Brainstormer Pro, Jules coding agent, Putty vibe coding, NotebookLabs, and Science Lab.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
