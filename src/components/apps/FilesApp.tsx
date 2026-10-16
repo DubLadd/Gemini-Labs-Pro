@@ -114,6 +114,74 @@ Welcome to the Google Labs OS Shell environment.
       ],
     },
     {
+      id: 'miniapps_folder',
+      name: 'MiniApps',
+      type: 'folder',
+      children: [
+        {
+          id: 'ma1',
+          name: 'CyberRogue.miniapp.json',
+          type: 'file',
+          extension: 'json',
+          size: '14.2 KB',
+          modified: 'Today, 09:15 AM',
+          content: JSON.stringify(
+            {
+              id: 'cyber-rogue',
+              title: 'Cyber Rogue: Neon Dungeon Crawl',
+              version: '1.2.0',
+              genre: 'Dungeon Crawler',
+              status: 'Installed & Pinned',
+              upgradesCount: 5,
+              engine: 'Mini Apps Web Canvas',
+            },
+            null,
+            2
+          ),
+        },
+        {
+          id: 'ma2',
+          name: 'SpckCyberRacer.miniapp.json',
+          type: 'file',
+          extension: 'json',
+          size: '8.6 KB',
+          modified: 'Today, 09:30 AM',
+          content: JSON.stringify(
+            {
+              id: 'spck-cyber-racer',
+              title: 'SPCK Cyber Racer: Turbo Highway',
+              version: '1.0.0',
+              genre: 'SPCK Port',
+              status: 'Installed & Pinned',
+              sourcePackage: 'spck-cyber-racer.zip',
+              engine: 'Node.js SPCK Web Canvas',
+            },
+            null,
+            2
+          ),
+        },
+        {
+          id: 'ma3',
+          name: 'GraviFlip.miniapp.json',
+          type: 'file',
+          extension: 'json',
+          size: '11.0 KB',
+          modified: 'Yesterday',
+          content: JSON.stringify(
+            {
+              id: 'gravi-flip',
+              title: 'Gravi-Flip: Quantum Dimension',
+              version: '1.1.0',
+              genre: 'Platformer',
+              status: 'Installed & Pinned',
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    },
+    {
       id: 'system',
       name: 'System Config',
       type: 'folder',

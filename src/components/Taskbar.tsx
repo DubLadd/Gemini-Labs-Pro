@@ -17,6 +17,11 @@ import {
   PenTool,
   Terminal,
   Settings,
+  FolderKanban,
+  Atom,
+  Zap,
+  Gamepad2,
+  Layers,
   HelpCircle,
 } from 'lucide-react';
 
@@ -72,6 +77,16 @@ export const Taskbar: React.FC<TaskbarProps> = ({
         return <Terminal {...props} />;
       case 'Settings':
         return <Settings {...props} />;
+      case 'FolderKanban':
+        return <FolderKanban {...props} />;
+      case 'Atom':
+        return <Atom {...props} />;
+      case 'Zap':
+        return <Zap {...props} />;
+      case 'Gamepad2':
+        return <Gamepad2 {...props} />;
+      case 'Layers':
+        return <Layers {...props} />;
       default:
         return <HelpCircle {...props} />;
     }

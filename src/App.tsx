@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { AppId, WindowState, WallpaperPreset, ToastMessage } from './types/os';
+import { AppId, WindowState, WallpaperPreset, ToastMessage, SnapZone } from './types/os';
 import { APPS, WALLPAPERS } from './data/apps';
 import { soundEngine } from './utils/audio';
 
@@ -15,6 +15,9 @@ import { ContextMenu } from './components/ContextMenu';
 import { PowerModal } from './components/PowerModal';
 import { Toast } from './components/Toast';
 import { WindowFrame } from './components/WindowFrame';
+import { GlobalSearch } from './components/GlobalSearch';
+import { SnapPreviewOverlay } from './components/SnapPreviewOverlay';
+import { FlattenedFile } from './utils/fileSystem';
 
 // Apps
 import { JulesApp } from './components/apps/JulesApp';
@@ -30,7 +33,13 @@ import { ScienceLabApp } from './components/apps/ScienceLabApp';
 import { BrainstormerApp } from './components/apps/BrainstormerApp';
 import { ArcadeApp } from './components/apps/ArcadeApp';
 import { AsciiApp } from './components/apps/AsciiApp';
+import { MiniAppsApp } from './components/apps/MiniAppsApp';
 import { PerformanceWidget } from './components/PerformanceWidget';
+import {
+  MiniAppDefinition,
+  getInstalledMiniApps,
+  setActiveMiniAppId,
+} from './utils/miniAppStore';
 
 import {
   GitPullRequest,
@@ -45,6 +54,8 @@ import {
   Atom,
   Zap,
   Gamepad2,
+  Layers,
+  Shield,
   HelpCircle,
 } from 'lucide-react';
 
@@ -65,6 +76,9 @@ export default function App() {
   // Menus & Modals State
   const [startMenuOpen, setStartMenuOpen] = useState<boolean>(false);
   const [quickSettingsOpen, setQuickSettingsOpen] = useState<boolean>(false);
+  const [globalSearchOpen, setGlobalSearchOpen] = useState<boolean>(false);
+  const [dragSnapZone, setDragSnapZone] = useState<SnapZone | null>(null);
+
   const [contextMenu, setContextMenu] = useState<{ isOpen: boolean; x: number; y: number }>({
     isOpen: false,
     x: 0,
@@ -78,6 +92,13 @@ export default function App() {
     action: null,
   });
   const [toast, setToast] = useState<ToastMessage | null>(null);
+  const [installedMiniApps, setInstalledMiniApps] = useState<MiniAppDefinition[]>(() => getInstalledMiniApps());
+
+  useEffect(() => {
+    const syncApps = () => setInstalledMiniApps(getInstalledMiniApps());
+    window.addEventListener('labs_miniapps_updated', syncApps);
+    return () => window.removeEventListener('labs_miniapps_updated', syncApps);
+  }, []);
 
   // Clock
   const [currentTime, setCurrentTime] = useState<string>('');
@@ -119,18 +140,6 @@ export default function App() {
       }
     }
   }, []);
-
-  // Keyboard shortcut listener for F11 or Esc
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'F11') {
-        e.preventDefault();
-        toggleFullscreen();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleFullscreen]);
 
   // Sync soundEngine settings
   useEffect(() => {
@@ -180,6 +189,7 @@ export default function App() {
         zIndex: 100 + prev.length + 1,
         position: { x: posX, y: posY },
         size: { width: maxW, height: maxH },
+        snappedZone: null,
       };
 
       return [...prev, newWin];
@@ -212,6 +222,7 @@ export default function App() {
           return {
             ...w,
             isMaximized: true,
+            snappedZone: null,
             prevPosition: { ...w.position },
             prevSize: { ...w.size },
           };
@@ -219,6 +230,7 @@ export default function App() {
           return {
             ...w,
             isMaximized: false,
+            snappedZone: null,
             position: w.prevPosition || { x: 40, y: 40 },
             size: w.prevSize || { width: 700, height: 480 },
           };
@@ -227,6 +239,84 @@ export default function App() {
     );
     bringToFront(appId);
   }, [bringToFront]);
+
+  const snapWindow = useCallback((appId: AppId, zone: SnapZone) => {
+    soundEngine.playSfx('click');
+    const screenW = typeof window !== 'undefined' ? window.innerWidth : 1200;
+    const screenH = typeof window !== 'undefined' ? window.innerHeight - 48 : 752; // subtract 48px taskbar
+
+    setWindows((prev) =>
+      prev.map((w) => {
+        if (w.id !== appId) return w;
+
+        const prevPos = w.prevPosition || { ...w.position };
+        const prevSz = w.prevSize || { ...w.size };
+
+        const halfW = Math.floor(screenW / 2);
+        const halfH = Math.floor(screenH / 2);
+
+        let newPos = { x: 0, y: 0 };
+        let newSize = { width: halfW, height: screenH };
+        let isMax = false;
+
+        switch (zone) {
+          case 'left':
+            newPos = { x: 0, y: 0 };
+            newSize = { width: halfW, height: screenH };
+            break;
+          case 'right':
+            newPos = { x: halfW, y: 0 };
+            newSize = { width: screenW - halfW, height: screenH };
+            break;
+          case 'top':
+            newPos = { x: 0, y: 0 };
+            newSize = { width: screenW, height: screenH };
+            isMax = true;
+            break;
+          case 'top-left':
+            newPos = { x: 0, y: 0 };
+            newSize = { width: halfW, height: halfH };
+            break;
+          case 'top-right':
+            newPos = { x: halfW, y: 0 };
+            newSize = { width: screenW - halfW, height: halfH };
+            break;
+          case 'bottom-left':
+            newPos = { x: 0, y: halfH };
+            newSize = { width: halfW, height: screenH - halfH };
+            break;
+          case 'bottom-right':
+            newPos = { x: halfW, y: halfH };
+            newSize = { width: screenW - halfW, height: screenH - halfH };
+            break;
+        }
+
+        return {
+          ...w,
+          position: newPos,
+          size: newSize,
+          prevPosition: prevPos,
+          prevSize: prevSz,
+          isMaximized: isMax,
+          snappedZone: zone,
+        };
+      })
+    );
+    bringToFront(appId);
+  }, [bringToFront]);
+
+  const unsnapWindow = useCallback((appId: AppId) => {
+    setWindows((prev) =>
+      prev.map((w) => {
+        if (w.id !== appId) return w;
+        return {
+          ...w,
+          snappedZone: null,
+          isMaximized: false,
+        };
+      })
+    );
+  }, []);
 
   const updateWindowPosition = useCallback((appId: AppId, x: number, y: number) => {
     setWindows((prev) =>
@@ -239,6 +329,81 @@ export default function App() {
       prev.map((w) => (w.id === appId ? { ...w, size: { width, height } } : w))
     );
   }, []);
+
+  // Global Keyboard Shortcuts (Global Search & Snapping)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Fullscreen
+      if (e.key === 'F11') {
+        e.preventDefault();
+        toggleFullscreen();
+        return;
+      }
+
+      // Global Search: Ctrl+K, Cmd+K, Alt+Space, or Ctrl+Space
+      if (
+        ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) ||
+        (e.altKey && e.code === 'Space') ||
+        (e.ctrlKey && e.code === 'Space')
+      ) {
+        e.preventDefault();
+        setGlobalSearchOpen((prev) => !prev);
+        setStartMenuOpen(false);
+        setQuickSettingsOpen(false);
+        setContextMenu({ isOpen: false, x: 0, y: 0 });
+        return;
+      }
+
+      // Slash shortcut for search when outside inputs
+      if (
+        e.key === '/' &&
+        !['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName) &&
+        !(e.target as HTMLElement)?.isContentEditable
+      ) {
+        e.preventDefault();
+        setGlobalSearchOpen(true);
+        setStartMenuOpen(false);
+        setQuickSettingsOpen(false);
+        return;
+      }
+
+      // Snapping Shortcuts: Alt + Arrow keys
+      if (e.altKey && activeWindowId) {
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          snapWindow(activeWindowId, 'left');
+          showToast('Window Snapped', 'Snapped to left half.', 'info');
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          snapWindow(activeWindowId, 'right');
+          showToast('Window Snapped', 'Snapped to right half.', 'info');
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          snapWindow(activeWindowId, 'top');
+          showToast('Window Maximized', 'Window maximized to full screen.', 'info');
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          const targetWin = windows.find((w) => w.id === activeWindowId);
+          if (targetWin?.snappedZone || targetWin?.isMaximized) {
+            toggleMaximizeWindow(activeWindowId);
+          } else {
+            minimizeWindow(activeWindowId);
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    toggleFullscreen,
+    activeWindowId,
+    snapWindow,
+    windows,
+    toggleMaximizeWindow,
+    minimizeWindow,
+    showToast,
+  ]);
 
   const showDesktopOrRestore = () => {
     soundEngine.playSfx('minimize');
@@ -284,6 +449,7 @@ export default function App() {
     });
     setStartMenuOpen(false);
     setQuickSettingsOpen(false);
+    setGlobalSearchOpen(false);
   };
 
   const closeAllFlyouts = () => {
@@ -334,6 +500,10 @@ export default function App() {
         return <Zap {...props} />;
       case 'Gamepad2':
         return <Gamepad2 {...props} />;
+      case 'Layers':
+        return <Layers {...props} />;
+      case 'Shield':
+        return <Shield {...props} />;
       default:
         return <HelpCircle {...props} />;
     }
@@ -381,6 +551,35 @@ export default function App() {
               </span>
             </div>
           ))}
+
+          {/* Pinned Mini Apps on Desktop */}
+          {installedMiniApps
+            .filter((mini) => mini.isPinnedToDesktop)
+            .map((mini) => (
+              <div
+                key={`miniapp-pin-${mini.id}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  soundEngine.playSfx('open');
+                  setActiveMiniAppId(mini.id);
+                  launchApp('miniapps');
+                }}
+                title={`Launch Mini App: ${mini.title} (v${mini.version})`}
+                className="w-24 h-24 flex flex-col items-center justify-center rounded-2xl hover:bg-white/10 active:bg-white/20 text-slate-100 cursor-pointer p-2 transition-all group text-center relative"
+              >
+                <div
+                  className={`w-12 h-12 rounded-2xl bg-gradient-to-tr ${mini.color} p-2.5 flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform mb-1.5 relative border border-white/20`}
+                >
+                  <Gamepad2 className="w-6 h-6 text-white drop-shadow" />
+                  <span className="absolute -top-1 -right-1 px-1 py-0.2 text-[8px] font-bold bg-amber-400 text-slate-950 rounded-full shadow">
+                    MINI
+                  </span>
+                </div>
+                <span className="text-[11px] font-medium leading-tight line-clamp-2 px-1 text-slate-200 group-hover:text-white drop-shadow">
+                  {mini.shortTitle || mini.title}
+                </span>
+              </div>
+            ))}
         </div>
 
         {/* Windows Layer */}
@@ -397,6 +596,9 @@ export default function App() {
                 onToggleMaximize={() => toggleMaximizeWindow(win.id)}
                 onUpdatePosition={(x, y) => updateWindowPosition(win.id, x, y)}
                 onUpdateSize={(w, h) => updateWindowSize(win.id, w, h)}
+                onSnap={(zone) => snapWindow(win.id, zone)}
+                onUnsnap={() => unsnapWindow(win.id)}
+                onDragSnapChange={(zone) => setDragSnapZone(zone)}
               >
                 {win.id === 'jules' && <JulesApp onShowToast={showToast} />}
                 {win.id === 'putty' && <PuttyApp onShowToast={showToast} />}
@@ -431,10 +633,22 @@ export default function App() {
                 {win.id === 'brainstormer' && <BrainstormerApp onShowToast={showToast} />}
                 {win.id === 'arcade' && <ArcadeApp onShowToast={showToast} />}
                 {win.id === 'ascii' && <AsciiApp onShowToast={showToast} />}
+                {win.id === 'miniapps' && (
+                  <MiniAppsApp
+                    onShowToast={showToast}
+                    onOpenStudio={(gameCode, gameTitle) => {
+                      launchApp('arcade');
+                      showToast('Studio Loaded', `Switched to Playground Studio for "${gameTitle}".`, 'info');
+                    }}
+                  />
+                )}
               </WindowFrame>
             );
           })}
         </div>
+
+        {/* Dynamic Snap Preview Ghost Overlay when Dragging near Edges/Corners */}
+        <SnapPreviewOverlay zone={dragSnapZone} />
 
         {/* Floating Performance Monitor Widget */}
         <PerformanceWidget
@@ -451,12 +665,14 @@ export default function App() {
         onToggleStartMenu={() => {
           setStartMenuOpen((prev) => !prev);
           setQuickSettingsOpen(false);
+          setGlobalSearchOpen(false);
           setContextMenu({ isOpen: false, x: 0, y: 0 });
         }}
         quickSettingsOpen={quickSettingsOpen}
         onToggleQuickSettings={() => {
           setQuickSettingsOpen((prev) => !prev);
           setStartMenuOpen(false);
+          setGlobalSearchOpen(false);
           setContextMenu({ isOpen: false, x: 0, y: 0 });
         }}
         onLaunchOrFocusApp={handleLaunchOrFocusApp}
@@ -467,11 +683,38 @@ export default function App() {
           showToast('Google Labs Connected', 'Synchronized with your AI experiments cluster.')
         }
         onOpenSearch={() => {
-          setStartMenuOpen(true);
+          setGlobalSearchOpen(true);
+          setStartMenuOpen(false);
           setQuickSettingsOpen(false);
+          setContextMenu({ isOpen: false, x: 0, y: 0 });
         }}
         isFullscreen={isFullscreen}
         onToggleFullscreen={toggleFullscreen}
+      />
+
+      {/* Global Spotlight Search Flyout */}
+      <GlobalSearch
+        isOpen={globalSearchOpen}
+        onClose={() => setGlobalSearchOpen(false)}
+        onLaunchApp={handleLaunchOrFocusApp}
+        onLaunchMiniApp={(id) => {
+          setActiveMiniAppId(id);
+          launchApp('miniapps');
+          showToast('Mini App Launched', `Launched mini app "${id}"`, 'success');
+        }}
+        onOpenFileInFiles={(file: FlattenedFile) => {
+          launchApp('files');
+          showToast('File Opened', `Opened "${file.file.name}" in Files explorer.`, 'info');
+        }}
+        onToggleFullscreen={toggleFullscreen}
+        onCycleWallpaper={cycleWallpaper}
+        onToggleAudio={() => setSoundEnabled((prev) => !prev)}
+        isAudioMuted={!soundEnabled}
+        onShowPowerDialog={(action) => {
+          setGlobalSearchOpen(false);
+          setPowerModal({ isOpen: true, action });
+        }}
+        onShowToast={showToast}
       />
 
       {/* Start Menu Flyout */}
@@ -535,6 +778,44 @@ export default function App() {
 
       {/* System Toast Notification */}
       <Toast toast={toast} onClose={() => setToast(null)} />
+
+      {/* Offline Connectivity Indicator */}
+      <OfflineIndicator />
     </div>
   );
 }
+
+/**
+ * Offline status monitoring hook
+ */
+function useOnlineStatus() {
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  return isOnline;
+}
+
+/**
+ * Offline UI Indicator Component
+ */
+const OfflineIndicator: React.FC = () => {
+  const isOnline = useOnlineStatus();
+  if (isOnline) return null;
+
+  return (
+    <div className="fixed bottom-14 left-4 z-[100] flex items-center gap-2.5 rounded-xl bg-amber-500/90 backdrop-blur-md px-3.5 py-2 text-xs font-bold text-slate-950 shadow-2xl border border-amber-400/50 animate-in slide-in-from-left-4 duration-300">
+      <div className="h-2 w-2 rounded-full bg-slate-950 animate-pulse" />
+      <span>DISCONNECTED — MINIAPPS RUNNING FROM CACHE</span>
+    </div>
+  );
+};

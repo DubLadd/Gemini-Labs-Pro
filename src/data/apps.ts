@@ -118,6 +118,15 @@ export const APPS: Record<string, AppConfig> = {
     defaultWidth: 1020,
     defaultHeight: 680,
   },
+  miniapps: {
+    id: 'miniapps',
+    title: 'Mini Apps // Game & Web Engine',
+    shortTitle: 'Mini Apps',
+    icon: 'Layers',
+    color: 'from-amber-400 via-orange-500 to-rose-600',
+    defaultWidth: 1020,
+    defaultHeight: 680,
+  },
 };
 
 export const WALLPAPERS: WallpaperPreset[] = [

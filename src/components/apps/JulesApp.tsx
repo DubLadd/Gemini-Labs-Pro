@@ -16,7 +16,22 @@ import {
   Activity,
   Layers,
   Cpu,
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
+  Radio,
+  AudioWaveform,
+  RotateCcw,
 } from 'lucide-react';
+import {
+  createSpeechRecognizer,
+  isSpeechRecognitionSupported,
+  isSpeechSynthesisSupported,
+  speakDirectiveResponse,
+  formatSpokenDirective,
+  SpeechRecognitionSession,
+} from '../../utils/speechRecognition';
 
 interface DiffLine {
   type: 'normal' | 'comment' | 'add' | 'delete';
@@ -147,6 +162,81 @@ export const JulesApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
   const [prModalOpen, setPrModalOpen] = useState(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
   const d3ContainerRef = useRef<SVGSVGElement>(null);
+
+  // Web Speech API Voice Directive State
+  const [isListening, setIsListening] = useState<boolean>(false);
+  const [speechSupported, setSpeechSupported] = useState<boolean>(true);
+  const [voiceFeedbackEnabled, setVoiceFeedbackEnabled] = useState<boolean>(true);
+  const [speechInterim, setSpeechInterim] = useState<string>('');
+  const [speechStatus, setSpeechStatus] = useState<string>('');
+  const recognizerRef = useRef<SpeechRecognitionSession | null>(null);
+
+  // Check Web Speech API support on mount
+  useEffect(() => {
+    setSpeechSupported(isSpeechRecognitionSupported());
+  }, []);
+
+  // Initialize Speech Recognizer session
+  useEffect(() => {
+    if (!isSpeechRecognitionSupported()) return;
+
+    recognizerRef.current = createSpeechRecognizer({
+      onStart: () => {
+        setIsListening(true);
+        setSpeechStatus('Listening for coding directives...');
+        soundEngine.playSfx('open');
+      },
+      onResult: (transcript, isFinal) => {
+        const formatted = formatSpokenDirective(transcript);
+        setCustomPrompt(formatted);
+        setSpeechInterim(formatted);
+        if (isFinal) {
+          setSpeechStatus('Directive captured.');
+        } else {
+          setSpeechStatus('Transcribing voice...');
+        }
+      },
+      onError: (errorMsg, type) => {
+        setIsListening(false);
+        setSpeechStatus(errorMsg);
+        if (type !== 'aborted' && type !== 'no-speech') {
+          if (onShowToast) {
+            onShowToast('Voice Directive Notice', errorMsg);
+          }
+        }
+      },
+      onEnd: () => {
+        setIsListening(false);
+      },
+    });
+
+    return () => {
+      recognizerRef.current?.abort();
+    };
+  }, [onShowToast]);
+
+  const toggleVoiceListening = () => {
+    if (!speechSupported) {
+      if (onShowToast) {
+        onShowToast(
+          'Voice Directives Unsupported',
+          'Web Speech API is not supported in this browser. Please use Chrome/Edge or type directives manually.'
+        );
+      }
+      return;
+    }
+
+    if (isListening) {
+      recognizerRef.current?.stop();
+      setIsListening(false);
+      soundEngine.playSfx('click');
+      setSpeechStatus('Voice input stopped.');
+    } else {
+      soundEngine.playSfx('click');
+      setSpeechStatus('Requesting microphone...');
+      recognizerRef.current?.start();
+    }
+  };
 
   const activeWorkflow = WORKFLOWS.find((w) => w.id === selectedWorkflowId) || WORKFLOWS[0];
 
@@ -332,14 +422,28 @@ export const JulesApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
     }, 2100);
   };
 
-  const handleCustomPromptSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!customPrompt.trim()) return;
-    const promptText = customPrompt.trim();
+  const handleCustomPromptSubmit = (e?: React.FormEvent, directText?: string) => {
+    if (e) e.preventDefault();
+    const promptText = (directText !== undefined ? directText : customPrompt).trim();
+    if (!promptText) return;
+
+    if (isListening) {
+      recognizerRef.current?.stop();
+      setIsListening(false);
+    }
+
     setCustomPrompt('');
+    setSpeechInterim('');
     soundEngine.playSfx('click');
     addLog(`[User Directive] "${promptText}"`);
     addLog(`[Jules Agent] Enqueued custom task. Decomposing into AST verification, test scaffold, and code synthesis.`);
+
+    if (voiceFeedbackEnabled && isSpeechSynthesisSupported()) {
+      speakDirectiveResponse(
+        `Directive received: ${promptText}. Jules is decomposing task into Abstract Syntax Tree analysis.`
+      );
+    }
+
     handleRunAgent();
   };
 
@@ -577,23 +681,199 @@ export const JulesApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
               );
             })}
 
-            {/* Custom Task Prompt */}
-            <form onSubmit={handleCustomPromptSubmit} className="pt-2 border-t border-white/10 mt-3 space-y-2">
-              <label className="text-[11px] text-slate-300 font-medium block">Prompt Jules for custom task:</label>
-              <input
-                type="text"
-                value={customPrompt}
-                onChange={(e) => setCustomPrompt(e.target.value)}
-                placeholder="e.g. Write integration test for webhook retry..."
-                className="w-full bg-white/10 border border-white/15 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-purple-400 font-sans"
-              />
-              <button
-                type="submit"
-                className="w-full py-1.5 rounded-lg bg-purple-600/40 hover:bg-purple-600/60 border border-purple-500/40 text-purple-200 text-xs font-medium flex items-center justify-center gap-1 transition-all"
-              >
-                <Sparkles className="w-3 h-3 text-purple-300" />
-                <span>Instruct Agent</span>
-              </button>
+            {/* Custom Task & Voice Directives Prompt Bar */}
+            <form onSubmit={handleCustomPromptSubmit} className="pt-3 border-t border-purple-500/20 mt-3 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] text-slate-300 font-medium flex items-center gap-1.5">
+                  <Sparkles className="w-3 h-3 text-purple-400" />
+                  <span>Coding Directive Prompt:</span>
+                </label>
+                <div className="flex items-center gap-1.5">
+                  {/* Voice Status Pill */}
+                  {speechSupported ? (
+                    <span
+                      className={`text-[9px] font-mono px-1.5 py-0.5 rounded-full border flex items-center gap-1 transition-all ${
+                        isListening
+                          ? 'bg-rose-500/25 text-rose-300 border-rose-500/40 animate-pulse'
+                          : 'bg-purple-500/15 text-purple-300 border-purple-500/30'
+                      }`}
+                    >
+                      {isListening ? (
+                        <>
+                          <Radio className="w-2.5 h-2.5 text-rose-400 animate-spin" />
+                          <span>LISTENING</span>
+                        </>
+                      ) : (
+                        <>
+                          <Mic className="w-2.5 h-2.5 text-purple-400" />
+                          <span>VOICE READY</span>
+                        </>
+                      )}
+                    </span>
+                  ) : (
+                    <span className="text-[9px] font-mono text-slate-500 bg-white/5 px-1.5 py-0.5 rounded">
+                      TEXT ONLY
+                    </span>
+                  )}
+
+                  {/* Speech Synthesis Voice Feedback Toggle */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVoiceFeedbackEnabled((prev) => !prev);
+                      soundEngine.playSfx('click');
+                    }}
+                    className={`p-1 rounded transition-colors ${
+                      voiceFeedbackEnabled
+                        ? 'text-purple-300 hover:text-white bg-purple-500/10 hover:bg-purple-500/20'
+                        : 'text-slate-500 hover:text-slate-400 bg-white/5'
+                    }`}
+                    title={
+                      voiceFeedbackEnabled
+                        ? 'Jules Voice Feedback Enabled (Speaks status aloud)'
+                        : 'Jules Voice Feedback Muted'
+                    }
+                  >
+                    {voiceFeedbackEnabled ? (
+                      <Volume2 className="w-3 h-3 text-purple-400" />
+                    ) : (
+                      <VolumeX className="w-3 h-3" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Prompt Input Box with Embedded Microphone Button */}
+              <div className="relative">
+                <input
+                  type="text"
+                  value={customPrompt}
+                  onChange={(e) => setCustomPrompt(e.target.value)}
+                  placeholder={
+                    isListening
+                      ? 'Listening... speak coding directive...'
+                      : 'Type directive or click mic to speak...'
+                  }
+                  className={`w-full bg-white/10 border rounded-xl pl-3 pr-16 py-2 text-xs text-white placeholder-slate-500 focus:outline-none font-sans transition-all shadow-inner ${
+                    isListening
+                      ? 'border-purple-400 ring-2 ring-purple-500/40 bg-purple-950/30'
+                      : 'border-white/15 focus:border-purple-400 focus:ring-1 focus:ring-purple-400/40'
+                  }`}
+                />
+
+                {/* Right Input Embedded Buttons */}
+                <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                  {customPrompt && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCustomPrompt('');
+                        setSpeechInterim('');
+                        soundEngine.playSfx('click');
+                      }}
+                      className="p-1 text-slate-400 hover:text-white text-xs transition-colors"
+                      title="Clear prompt"
+                    >
+                      ✕
+                    </button>
+                  )}
+
+                  {/* Microphone Button */}
+                  <button
+                    type="button"
+                    onClick={toggleVoiceListening}
+                    disabled={!speechSupported}
+                    className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
+                      isListening
+                        ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/40 ring-2 ring-rose-400 animate-pulse'
+                        : speechSupported
+                        ? 'bg-purple-600/30 hover:bg-purple-600/50 text-purple-300 hover:text-white border border-purple-500/40'
+                        : 'bg-white/5 text-slate-600 cursor-not-allowed'
+                    }`}
+                    title={
+                      !speechSupported
+                        ? 'Web Speech API is not supported in this browser'
+                        : isListening
+                        ? 'Stop voice recording'
+                        : 'Speak coding directive via Web Speech API'
+                    }
+                  >
+                    {isListening ? (
+                      <MicOff className="w-3.5 h-3.5 text-white" />
+                    ) : (
+                      <Mic className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* Real-time Voice Waveform Visualizer & Status when Listening */}
+              {isListening && (
+                <div className="p-2 rounded-xl bg-purple-950/60 border border-purple-500/40 flex items-center justify-between gap-2 shadow-inner animate-in fade-in duration-200">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {/* Simulated Audio Frequency Spectrum Bars */}
+                    <div className="flex items-end gap-0.5 h-3.5 shrink-0">
+                      <span className="w-0.5 bg-fuchsia-400 rounded-full animate-bounce" style={{ height: '70%', animationDuration: '450ms' }} />
+                      <span className="w-0.5 bg-purple-300 rounded-full animate-bounce" style={{ height: '100%', animationDuration: '300ms' }} />
+                      <span className="w-0.5 bg-violet-400 rounded-full animate-bounce" style={{ height: '85%', animationDuration: '500ms' }} />
+                      <span className="w-0.5 bg-pink-400 rounded-full animate-bounce" style={{ height: '90%', animationDuration: '350ms' }} />
+                      <span className="w-0.5 bg-purple-400 rounded-full animate-bounce" style={{ height: '60%', animationDuration: '400ms' }} />
+                      <span className="w-0.5 bg-fuchsia-300 rounded-full animate-bounce" style={{ height: '75%', animationDuration: '320ms' }} />
+                    </div>
+                    <span className="text-[10px] text-purple-200 font-mono italic truncate">
+                      {speechInterim || 'Listening... speak directive now'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={toggleVoiceListening}
+                    className="text-[9px] text-rose-300 hover:text-white px-2 py-0.5 rounded bg-rose-950/80 border border-rose-500/40 shrink-0"
+                  >
+                    Finish Voice
+                  </button>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="submit"
+                  disabled={!customPrompt.trim()}
+                  className="flex-1 py-1.5 rounded-xl bg-gradient-to-r from-violet-600 via-purple-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 disabled:opacity-40 text-white text-xs font-semibold flex items-center justify-center gap-1.5 shadow-md shadow-purple-900/40 transition-all active:scale-[0.98]"
+                >
+                  <Sparkles className="w-3 h-3 text-purple-200" />
+                  <span>Instruct Agent</span>
+                </button>
+              </div>
+
+              {/* Quick Voice Directives Preset Chips */}
+              <div className="pt-1 border-t border-white/5 space-y-1">
+                <span className="text-[9px] text-slate-400 uppercase tracking-wider font-mono block">
+                  Quick Voice Directives:
+                </span>
+                <div className="flex flex-col gap-1">
+                  {[
+                    'Optimize user onboarding flow for memory leaks',
+                    'Write edge case tests for AuthToken validation',
+                    'Implement asynchronous batch sync webhook',
+                  ].map((directive, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => handleCustomPromptSubmit(undefined, directive)}
+                      className="text-[10px] text-left px-2 py-1 rounded-lg bg-white/[0.03] hover:bg-purple-950/50 hover:border-purple-500/40 border border-white/5 text-slate-300 hover:text-purple-200 flex items-center justify-between group transition-all"
+                    >
+                      <span className="truncate flex items-center gap-1.5">
+                        <Mic className="w-2.5 h-2.5 text-purple-400/80 group-hover:text-purple-300 shrink-0" />
+                        <span>{directive}</span>
+                      </span>
+                      <span className="text-[9px] text-slate-500 group-hover:text-purple-400 shrink-0 font-mono">
+                        Run ↵
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </form>
           </div>
 

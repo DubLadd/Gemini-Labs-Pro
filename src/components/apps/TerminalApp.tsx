@@ -3,6 +3,7 @@ import { soundEngine } from '../../utils/audio';
 import { AppId } from '../../types/os';
 import { APPS } from '../../data/apps';
 import { Terminal, Palette, RotateCcw, Trash2, ArrowUp, ArrowDown } from 'lucide-react';
+import { getInstalledMiniApps, setActiveMiniAppId } from '../../utils/miniAppStore';
 
 export type TerminalThemeId = 'matrix' | 'cyberpunk' | 'minimal' | 'amber' | 'dracula' | 'synthwave';
 
@@ -448,6 +449,36 @@ export const TerminalApp: React.FC<TerminalAppProps> = ({
           animate: true,
           text: '👾 Launching ASCII Art Studio // WebRTC Broadcast & Audio Pulse...',
         });
+      } else if (root === 'miniapp' || root === 'miniapps') {
+        const sub = lowerArgs[0];
+        if (sub === 'list') {
+          const list = getInstalledMiniApps();
+          newLines.push({
+            id: `out-${timeBase}`,
+            type: 'success',
+            animate: true,
+            text: `Installed Mini Apps (${list.length}):\n` +
+              list.map((m) => `  * [${m.id}] ${m.title} (v${m.version}) - ${m.upgradesApplied.length} upgrades`).join('\n'),
+          });
+        } else if (sub === 'run' || sub === 'play') {
+          const targetId = lowerArgs[1];
+          if (targetId) setActiveMiniAppId(targetId);
+          if (onLaunchApp) onLaunchApp('miniapps');
+          newLines.push({
+            id: `out-${timeBase}`,
+            type: 'success',
+            animate: true,
+            text: `🚀 Launching Mini App engine${targetId ? ` for [${targetId}]` : ''}...`,
+          });
+        } else {
+          if (onLaunchApp) onLaunchApp('miniapps');
+          newLines.push({
+            id: `out-${timeBase}`,
+            type: 'success',
+            animate: true,
+            text: '🕹️ Opening Mini Apps // Game & Web Engine...',
+          });
+        }
       } else if (root === 'flow' || root === 'music' || root === 'beat' || root === 'synth') {
         if (onLaunchApp) onLaunchApp('musicfx');
         newLines.push({

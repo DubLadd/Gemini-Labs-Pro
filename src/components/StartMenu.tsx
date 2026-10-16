@@ -18,6 +18,7 @@ import {
   Atom,
   Zap,
   Gamepad2,
+  Layers,
   HelpCircle,
 } from 'lucide-react';
 
@@ -84,6 +85,8 @@ export const StartMenu: React.FC<StartMenuProps> = ({
         return <Zap {...props} />;
       case 'Gamepad2':
         return <Gamepad2 {...props} />;
+      case 'Layers':
+        return <Layers {...props} />;
       default:
         return <HelpCircle {...props} />;
     }

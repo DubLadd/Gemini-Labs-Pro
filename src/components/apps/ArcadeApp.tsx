@@ -35,32 +35,55 @@ import {
   PlusCircle,
   FileCode,
   SlidersHorizontal,
+  Paintbrush,
+  Box,
+  Music,
+  Bug,
+  Map,
+  FileArchive,
+  UploadCloud,
+  Package,
+  FileText,
 } from 'lucide-react';
+import { SpriteEditor } from './arcade/SpriteEditor';
+import { TilemapEditor } from './arcade/TilemapEditor';
+import { SfxStudio } from './arcade/SfxStudio';
+import { ParticleDesigner } from './arcade/ParticleDesigner';
+import { DebugInspector } from './arcade/DebugInspector';
+import { GameUploadModal } from './arcade/GameUploadModal';
+import {
+  unpackGameZip,
+  packageGameToZip,
+  adaptCodeToPlaygroundEngine,
+  UnpackedGame,
+} from './arcade/zipUtils';
+import {
+  saveMiniApp,
+  setActiveMiniAppId,
+  MiniAppDefinition,
+} from '../../utils/miniAppStore';
+import {
+  SpriteData,
+  TilemapData,
+  SfxPreset,
+  ParticleEmitterConfig,
+  EngineDebugState,
+  GameTemplate,
+} from './arcade/types';
+import {
+  DEFAULT_SPRITES,
+  INITIAL_TILEMAP,
+  DEFAULT_SFX_PRESETS,
+  DEFAULT_EMITTERS,
+  DEFAULT_TILE_DEFS,
+} from './arcade/defaults';
+import { COMPLEX_GAME_PRESETS } from './arcade/complexGamePresets';
 
 interface ArcadeAppProps {
   onShowToast?: (title: string, msg: string, type?: 'info' | 'success' | 'warn') => void;
 }
 
-export interface GameTemplate {
-  id: string;
-  title: string;
-  genre: 'Shooter' | 'Runner' | 'Breakout' | 'Snake' | 'Physics' | 'Custom';
-  description: string;
-  version: string;
-  upgradesApplied: string[];
-  tags: string[];
-  controlsLegend: { key: string; action: string }[];
-  params: {
-    playerSpeed: number;
-    difficulty: number;
-    lives: number;
-    fireRate: number;
-    particleDensity: 'low' | 'med' | 'high' | 'ultra';
-    colorTheme: 'cyber-neon' | 'synthwave-sunset' | 'emerald-matrix' | 'solar-amber';
-    screenShake: boolean;
-  };
-  code: string;
-}
+export type { GameTemplate };
 
 // Built-in starter game codes with rich canvas game loops
 const PRESET_GAMES: GameTemplate[] = [
@@ -1120,19 +1143,35 @@ const UPGRADE_RECIPES = [
   },
 ];
 
+const ALL_STARTER_GAMES: GameTemplate[] = [...COMPLEX_GAME_PRESETS, ...PRESET_GAMES];
+
 export const ArcadeApp: React.FC<ArcadeAppProps> = ({ onShowToast }) => {
-  const [activeTab, setActiveTab] = useState<'play' | 'code' | 'library' | 'generator'>('play');
-  const [games, setGames] = useState<GameTemplate[]>(PRESET_GAMES);
-  const [selectedGameId, setSelectedGameId] = useState<string>('neon-defender');
-  const [activeGameCode, setActiveGameCode] = useState<string>(PRESET_GAMES[0].code);
+  const [activeTab, setActiveTab] = useState<'play' | 'code' | 'sprites' | 'tilemap' | 'sfx' | 'particles' | 'library' | 'generator'>('play');
+  const [rightPanelTab, setRightPanelTab] = useState<'controls' | 'debug'>('controls');
+  const [games, setGames] = useState<GameTemplate[]>(ALL_STARTER_GAMES);
+  const [selectedGameId, setSelectedGameId] = useState<string>('cyber-rogue');
+  const [activeGameCode, setActiveGameCode] = useState<string>(ALL_STARTER_GAMES[0].code);
+
+  // Advanced Game Development Tools State
+  const [sprites, setSprites] = useState<SpriteData[]>(DEFAULT_SPRITES);
+  const [tilemap, setTilemap] = useState<TilemapData>(INITIAL_TILEMAP);
+  const [sfxList, setSfxList] = useState<SfxPreset[]>(DEFAULT_SFX_PRESETS);
+  const [emitters, setEmitters] = useState<ParticleEmitterConfig[]>(DEFAULT_EMITTERS);
+  const [debugState, setDebugState] = useState<EngineDebugState>({
+    showHitboxes: false,
+    showTileGrid: false,
+    godMode: false,
+    timeScale: 1.0,
+    freezeFrame: false,
+  });
 
   // Runtime Game Engine state
   const [gameState, setGameState] = useState<'ready' | 'playing' | 'paused' | 'gameover'>('ready');
   const [score, setScore] = useState<number>(0);
   const [highScore, setHighScore] = useState<number>(() => {
-    return parseInt(localStorage.getItem('arcade_hiscore_neon-defender') || '1450', 10);
+    return parseInt(localStorage.getItem('arcade_hiscore_cyber-rogue') || '1650', 10);
   });
-  const [lives, setLives] = useState<number>(3);
+  const [lives, setLives] = useState<number>(4);
   const [fps, setFps] = useState<number>(60);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [crtEffect, setCrtEffect] = useState<boolean>(true);
@@ -1143,12 +1182,21 @@ export const ArcadeApp: React.FC<ArcadeAppProps> = ({ onShowToast }) => {
   const [upgradeDiff, setUpgradeDiff] = useState<string | null>(null);
   const [lastUpgradeMsg, setLastUpgradeMsg] = useState<string | null>(null);
 
-  // Generator state
+  // Generator & Upload state
   const [newGamePrompt, setNewGamePrompt] = useState<string>('Create a retro neon asteroids game with gravity physics and mining lasers');
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [showUploadModal, setShowUploadModal] = useState<boolean>(false);
+  const [attachedSourceCode, setAttachedSourceCode] = useState<{
+    fileName: string;
+    code: string;
+    lineCount: number;
+    fileList?: { path: string; size: number }[];
+  } | null>(null);
+  const [isExportingZip, setIsExportingZip] = useState<boolean>(false);
 
   // Canvas & Engine refs
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const generatorFileInputRef = useRef<HTMLInputElement | null>(null);
   const requestRef = useRef<number | null>(null);
   const lastTimeRef = useRef<number>(performance.now());
   const engineRef = useRef<any>(null);
@@ -1228,7 +1276,68 @@ export const ArcadeApp: React.FC<ArcadeAppProps> = ({ onShowToast }) => {
     }
   }, [isMuted]);
 
-  // Spark / Particle factory
+  // Custom synth audio player for SFX Bank
+  const playCustomSynthSfx = useCallback((sfxOrId: string | SfxPreset) => {
+    if (isMuted) return;
+    try {
+      const preset = typeof sfxOrId === 'string'
+        ? sfxList.find((s) => s.id === sfxOrId) || DEFAULT_SFX_PRESETS.find((s) => s.id === sfxOrId)
+        : sfxOrId;
+      if (!preset) {
+        playArcadeSfx('laser');
+        return;
+      }
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+      const duration = Math.max(0.05, preset.duration);
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(preset.volume, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+      gain.connect(ctx.destination);
+
+      if (preset.waveform === 'noise') {
+        const bufferSize = ctx.sampleRate * duration;
+        const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+        const noise = ctx.createBufferSource();
+        noise.buffer = buffer;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.setValueAtTime(preset.startFreq, now);
+        filter.frequency.exponentialRampToValueAtTime(Math.max(20, preset.endFreq), now + duration);
+        noise.connect(filter);
+        filter.connect(gain);
+        noise.start(now);
+        noise.stop(now + duration);
+      } else {
+        const osc = ctx.createOscillator();
+        osc.type = preset.waveform as OscillatorType;
+        osc.frequency.setValueAtTime(Math.max(20, preset.startFreq), now);
+        osc.frequency.exponentialRampToValueAtTime(Math.max(20, preset.endFreq), now + duration);
+        if (preset.vibratoDepth > 0 && preset.vibratoFreq > 0) {
+          const lfo = ctx.createOscillator();
+          const lfoGain = ctx.createGain();
+          lfo.frequency.setValueAtTime(preset.vibratoFreq, now);
+          lfoGain.gain.setValueAtTime(preset.vibratoDepth, now);
+          lfo.connect(lfoGain);
+          lfoGain.connect(osc.frequency);
+          lfo.start(now);
+          lfo.stop(now + duration);
+        }
+        osc.connect(gain);
+        osc.start(now);
+        osc.stop(now + duration);
+      }
+    } catch {
+      // Audio error
+    }
+  }, [isMuted, sfxList, playArcadeSfx]);
+
+  // Particle emission helper
   const spawnSparks = useCallback((x: number, y: number, count: number, color: string) => {
     if (!engineRef.current) return;
     const mult = engineRef.current.params.particleDensity === 'ultra' ? 2 : engineRef.current.params.particleDensity === 'low' ? 0.5 : 1;
@@ -1249,6 +1358,157 @@ export const ArcadeApp: React.FC<ArcadeAppProps> = ({ onShowToast }) => {
     }
   }, []);
 
+  // Custom particle emitter spawner for engine
+  const spawnCustomEmitter = useCallback((emitterId: string, x: number, y: number) => {
+    if (!engineRef.current) return;
+    const config = emitters.find((e) => e.id === emitterId) || DEFAULT_EMITTERS[0];
+    if (!config) return;
+    const count = Math.max(5, Math.floor(config.rate / 2));
+    for (let i = 0; i < count; i++) {
+      const baseAngle = (config.angle * Math.PI) / 180;
+      const spreadAngle = ((Math.random() - 0.5) * config.spread * Math.PI) / 180;
+      const finalAngle = baseAngle + spreadAngle;
+      const speed = config.speedMin + Math.random() * (config.speedMax - config.speedMin);
+      engineRef.current.particles.push({
+        x,
+        y,
+        vx: Math.cos(finalAngle) * speed + config.gravityX,
+        vy: Math.sin(finalAngle) * speed + config.gravityY,
+        life: config.lifetime,
+        maxLife: config.lifetime,
+        color: Math.random() > 0.5 ? config.startColor : config.endColor,
+        size: config.startSize + Math.random() * (config.endSize - config.startSize),
+      });
+    }
+  }, [emitters]);
+
+  // Draw sprite onto game canvas
+  const drawSpriteEngine = useCallback((name: string, x: number, y: number, opts: any = {}) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const spr = sprites.find((s) => s.id === name || s.name === name);
+    if (!spr || !spr.frames || !spr.frames.length) return;
+    const frameIdx = opts.frame !== undefined
+      ? opts.frame % spr.frames.length
+      : Math.floor((engineRef.current?.time || 0) * (spr.fps || 4)) % spr.frames.length;
+    const frame = spr.frames[frameIdx] || spr.frames[0];
+    const pixelSize = opts.size || (opts.scale ? 2 * opts.scale : 2);
+    const facing = opts.facing !== undefined ? opts.facing : 1;
+
+    ctx.save();
+    ctx.translate(x, y);
+    if (facing < 0) ctx.scale(-1, 1);
+    if (opts.alpha !== undefined) ctx.globalAlpha = opts.alpha;
+
+    const startX = -((spr.width * pixelSize) / 2);
+    const startY = -((spr.height * pixelSize) / 2);
+
+    for (let r = 0; r < spr.height; r++) {
+      for (let c = 0; c < spr.width; c++) {
+        const color = frame[r]?.[c];
+        if (color) {
+          ctx.fillStyle = color;
+          ctx.fillRect(startX + c * pixelSize, startY + r * pixelSize, pixelSize, pixelSize);
+        }
+      }
+    }
+    ctx.restore();
+  }, [sprites]);
+
+  // Draw Tilemap onto game canvas
+  const drawTilemapEngine = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !tilemap) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const ts = tilemap.tileSize || 25;
+    for (let r = 0; r < tilemap.rows; r++) {
+      for (let c = 0; c < tilemap.cols; c++) {
+        const id = tilemap.grid[r]?.[c];
+        if (!id) continue;
+        const def = DEFAULT_TILE_DEFS.find((t) => t.id === id);
+        if (def && def.color && def.color !== 'transparent') {
+          ctx.fillStyle = def.color;
+          ctx.fillRect(c * ts, r * ts, ts, ts);
+          if (def.solid) {
+            ctx.strokeStyle = '#ffffff15';
+            ctx.strokeRect(c * ts + 1, r * ts + 1, ts - 2, ts - 2);
+          }
+        }
+      }
+    }
+  }, [tilemap]);
+
+  // Check tilemap collision
+  const checkTileCollisionEngine = useCallback((x: number, y: number, w: number, h: number, solidIds: number[] = [1, 5]) => {
+    if (!tilemap) return false;
+    const ts = tilemap.tileSize || 25;
+    const leftCol = Math.floor((x - w / 2) / ts);
+    const rightCol = Math.floor((x + w / 2) / ts);
+    const topRow = Math.floor((y - h / 2) / ts);
+    const bottomRow = Math.floor((y + h / 2) / ts);
+
+    for (let r = topRow; r <= bottomRow; r++) {
+      for (let c = leftCol; c <= rightCol; c++) {
+        if (r < 0 || r >= tilemap.rows || c < 0 || c >= tilemap.cols) return true;
+        const id = tilemap.grid[r]?.[c];
+        if (solidIds.includes(id)) return true;
+      }
+    }
+    return false;
+  }, [tilemap]);
+
+  // Step 1 Frame for debugger
+  const handleStepFrame = useCallback(() => {
+    if (!engineRef.current || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const engine = engineRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const dt = 1 / 60;
+    engine.time += dt;
+    try {
+      const updateFn = new Function('engine', 'dt', `${activeGameCode}\nif (typeof update === 'function') update(engine, dt);`);
+      updateFn(engine, dt);
+    } catch {}
+    try {
+      const renderFn = new Function('engine', 'ctx', `${activeGameCode}\nif (typeof render === 'function') render(engine, ctx);`);
+      renderFn(engine, ctx);
+    } catch {}
+  }, [activeGameCode]);
+
+  // Tool injection callbacks
+  const handleInjectSpriteToGame = (sprite: SpriteData) => {
+    const comment = `\n// Injected Sprite: ${sprite.name}\n// Use: engine.drawSprite('${sprite.id}', p.x, p.y);\n`;
+    setActiveGameCode((prev) => prev + comment);
+    if (onShowToast) onShowToast('Sprite Injected', `Added '${sprite.name}' hook into game script!`, 'success');
+  };
+
+  const handleApplyTilemapToGame = (newTilemap: TilemapData) => {
+    setTilemap(newTilemap);
+    if (engineRef.current) {
+      engineRef.current.tilemap = newTilemap;
+      if (engineRef.current.map && Array.isArray(engineRef.current.map)) {
+        engineRef.current.map = newTilemap.grid;
+      }
+    }
+    if (onShowToast) onShowToast('Tilemap Applied', `Applied ${newTilemap.name} to runtime engine!`, 'success');
+  };
+
+  const handleInjectSfxToGame = (sfx: SfxPreset) => {
+    const comment = `\n// Injected SFX: ${sfx.name}\n// Use: engine.playCustomSfx('${sfx.id}');\n`;
+    setActiveGameCode((prev) => prev + comment);
+    if (onShowToast) onShowToast('SFX Registered', `Added '${sfx.name}' hook to game script!`, 'success');
+  };
+
+  const handleInjectEmitterToGame = (emitter: ParticleEmitterConfig) => {
+    const comment = `\n// Injected Emitter: ${emitter.name}\n// Use: engine.spawnCustomEmitter('${emitter.id}', x, y);\n`;
+    setActiveGameCode((prev) => prev + comment);
+    if (onShowToast) onShowToast('Emitter Registered', `Added '${emitter.name}' hook to game script!`, 'success');
+  };
+
   // Initialize Game Environment
   const initEngineInstance = useCallback(() => {
     const canvas = canvasRef.current;
@@ -1268,8 +1528,23 @@ export const ArcadeApp: React.FC<ArcadeAppProps> = ({ onShowToast }) => {
       pad: padRef.current,
       particles: [],
       shake: 0,
-      playSound: playArcadeSfx,
+      sprites,
+      drawSprite: drawSpriteEngine,
+      tilemap,
+      drawTilemap: drawTilemapEngine,
+      checkTileCollision: checkTileCollisionEngine,
+      playSound: (nameOrType: string) => {
+        if (sfxList.some((s) => s.id === nameOrType)) {
+          playCustomSynthSfx(nameOrType);
+        } else {
+          playArcadeSfx(nameOrType as any);
+        }
+      },
+      playCustomSfx: playCustomSynthSfx,
       spawnSparks,
+      spawnCustomEmitter,
+      timeScale: debugState.timeScale,
+      debug: debugState,
       triggerShake: (amt: number) => {
         if (engineInstance.params.screenShake) {
           engineInstance.shake = Math.min(25, engineInstance.shake + amt);
@@ -1284,6 +1559,7 @@ export const ArcadeApp: React.FC<ArcadeAppProps> = ({ onShowToast }) => {
         }
       },
       loseLife: () => {
+        if (debugState.godMode) return;
         engineInstance.lives -= 1;
         setLives(engineInstance.lives);
         if (engineInstance.lives <= 0) {
@@ -1310,7 +1586,24 @@ export const ArcadeApp: React.FC<ArcadeAppProps> = ({ onShowToast }) => {
         onShowToast('Code Error', String(err), 'warn');
       }
     }
-  }, [currentGame, activeGameCode, highScore, selectedGameId, playArcadeSfx, spawnSparks, onShowToast]);
+  }, [
+    currentGame,
+    activeGameCode,
+    highScore,
+    selectedGameId,
+    sprites,
+    drawSpriteEngine,
+    tilemap,
+    drawTilemapEngine,
+    checkTileCollisionEngine,
+    sfxList,
+    playCustomSynthSfx,
+    playArcadeSfx,
+    spawnSparks,
+    spawnCustomEmitter,
+    debugState,
+    onShowToast,
+  ]);
 
   // Main 60 FPS Game Loop
   useEffect(() => {
@@ -1318,7 +1611,7 @@ export const ArcadeApp: React.FC<ArcadeAppProps> = ({ onShowToast }) => {
     let fpsTimer = performance.now();
 
     const loop = (timestamp: number) => {
-      const dt = Math.min(0.08, (timestamp - lastTimeRef.current) / 1000);
+      const dt = Math.min(0.08, ((timestamp - lastTimeRef.current) / 1000) * (debugState.timeScale || 1.0));
       lastTimeRef.current = timestamp;
 
       // Calculate FPS
@@ -1393,6 +1686,52 @@ export const ArcadeApp: React.FC<ArcadeAppProps> = ({ onShowToast }) => {
           }
           ctx.globalAlpha = 1.0;
 
+          // Hitboxes Debug Overlay
+          if (debugState.showHitboxes) {
+            ctx.save();
+            if (engine.player) {
+              const pw = engine.player.width || 30;
+              const ph = engine.player.height || 30;
+              ctx.strokeStyle = '#10b981';
+              ctx.lineWidth = 1.5;
+              ctx.strokeRect(engine.player.x - pw / 2, engine.player.y - ph / 2, pw, ph);
+              ctx.fillStyle = '#10b981';
+              ctx.font = '9px monospace';
+              ctx.fillText('PLAYER', engine.player.x - 14, engine.player.y - ph / 2 - 3);
+            }
+            if (Array.isArray(engine.enemies)) {
+              ctx.strokeStyle = '#f43f5e';
+              ctx.lineWidth = 1.5;
+              for (const e of engine.enemies) {
+                const ew = e.width || (e.radius ? e.radius * 2 : 24);
+                const eh = e.height || (e.radius ? e.radius * 2 : 24);
+                ctx.strokeRect(e.x - ew / 2, e.y - eh / 2, ew, eh);
+              }
+            }
+            if (Array.isArray(engine.bullets)) {
+              ctx.strokeStyle = '#06b6d4';
+              ctx.lineWidth = 1;
+              for (const b of engine.bullets) {
+                ctx.strokeRect(b.x - 4, b.y - 8, 8, 16);
+              }
+            }
+            if (Array.isArray(engine.spells)) {
+              ctx.strokeStyle = '#a855f7';
+              ctx.lineWidth = 1;
+              for (const s of engine.spells) {
+                ctx.strokeRect(s.x - 6, s.y - 6, 12, 12);
+              }
+            }
+            if (Array.isArray(engine.platforms)) {
+              ctx.strokeStyle = '#eab308';
+              ctx.lineWidth = 1;
+              for (const plat of engine.platforms) {
+                ctx.strokeRect(plat.x, plat.y, plat.width, plat.height);
+              }
+            }
+            ctx.restore();
+          }
+
           ctx.restore();
         }
       }
@@ -1404,7 +1743,7 @@ export const ArcadeApp: React.FC<ArcadeAppProps> = ({ onShowToast }) => {
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [gameState, activeGameCode]);
+  }, [gameState, activeGameCode, debugState]);
 
   // Key listeners
   useEffect(() => {
@@ -1581,17 +1920,27 @@ REQUIREMENTS:
       const apiKey = import.meta.env.VITE_GEMINI_API_KEY || (process.env as any).GEMINI_API_KEY || 'AIzaSyDummyKey';
       const ai = new GoogleGenAI({ apiKey });
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
-        contents: `Create a complete, fun, playable 2D HTML5 canvas game from scratch based on:
-"${newGamePrompt}"
+      let promptText = `Create a complete, fun, playable 2D HTML5 canvas game from scratch based on:
+"${newGamePrompt}"`;
 
-The code must define three global functions:
+      if (attachedSourceCode) {
+        promptText += `\n\nAdapt, upgrade, and modernize this attached game source code (${attachedSourceCode.fileName}):
+\`\`\`javascript
+${attachedSourceCode.code.slice(0, 8500)}
+\`\`\`
+Preserve its core game mechanics while upgrading it to run seamlessly on the Playground Studio engine!`;
+      }
+
+      promptText += `\n\nThe code must define three global functions:
 1. init(engine): set up player, entities, score
 2. update(engine, dt): read keys (engine.keys, engine.pad), move entities, handle collisions, call engine.addScore(pts), engine.loseLife(), engine.playSound('laser'|'explosion'|'hit'|'success')
 3. render(engine, ctx): clear canvas, draw glowing shapes, player, particles, HUD items
 
-Return ONLY the code within \`\`\`javascript ... \`\`\`.`,
+Return ONLY the code within \`\`\`javascript ... \`\`\`.`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: promptText,
       });
 
       const text = response.text || '';
@@ -1601,11 +1950,13 @@ Return ONLY the code within \`\`\`javascript ... \`\`\`.`,
       if (generatedCode && generatedCode.includes('function')) {
         const newGame: GameTemplate = {
           id: `custom-${Date.now()}`,
-          title: newGamePrompt.slice(0, 24) || 'Custom AI Game',
+          title: newGamePrompt.slice(0, 24) || (attachedSourceCode ? attachedSourceCode.fileName.replace(/\.[^/.]+$/, '') : 'Custom AI Game'),
           genre: 'Custom',
-          description: `Custom game generated from prompt: "${newGamePrompt}"`,
+          description: attachedSourceCode
+            ? `Synthesized from source "${attachedSourceCode.fileName}" with prompt: "${newGamePrompt}"`
+            : `Custom game generated from prompt: "${newGamePrompt}"`,
           version: '1.0.0',
-          upgradesApplied: ['AI Prompt Synthesis'],
+          upgradesApplied: attachedSourceCode ? ['ZIP / Code Porting', 'AI Synthesis Upgrade'] : ['AI Prompt Synthesis'],
           tags: ['Custom', 'GenAI', 'Arcade'],
           controlsLegend: [
             { key: 'Arrows / WASD', action: 'Move Player' },
@@ -1714,6 +2065,32 @@ Return ONLY the code within \`\`\`javascript ... \`\`\`.`,
     }
   };
 
+  // Export game as a full downloadable ZIP bundle (supports SPCK Editor, Node.js, and web browsers)
+  const handleExportZip = async () => {
+    soundEngine.playSfx('click');
+    setIsExportingZip(true);
+    try {
+      const blob = await packageGameToZip(currentGame, sprites, tilemap);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${currentGame.id}-bundle.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      soundEngine.playSfx('success');
+      if (onShowToast) {
+        onShowToast('ZIP Package Exported', `Downloaded ${currentGame.title} as ZIP archive!`, 'success');
+      }
+    } catch (err) {
+      console.error('Error packaging zip', err);
+      if (onShowToast) {
+        onShowToast('Export Error', 'Failed to generate ZIP bundle.', 'warn');
+      }
+    } finally {
+      setIsExportingZip(false);
+    }
+  };
+
   // Save game to OS Files virtual directory
   const handleSaveToOS = () => {
     soundEngine.playSfx('click');
@@ -1731,6 +2108,34 @@ Return ONLY the code within \`\`\`javascript ... \`\`\`.`,
       }
     } catch {
       // Ignore
+    }
+  };
+
+  const handleImportGame = (newGame: GameTemplate, targetTab: 'play' | 'code') => {
+    setGames((prev) => [newGame, ...prev]);
+    setSelectedGameId(newGame.id);
+    setActiveGameCode(newGame.code);
+    setActiveTab(targetTab);
+    soundEngine.playSfx('success');
+    if (onShowToast) {
+      onShowToast('Game Loaded', `Imported ${newGame.title}!`, 'success');
+    }
+  };
+
+  const handleSendToSynthesizer = (unpacked: UnpackedGame) => {
+    setAttachedSourceCode({
+      fileName: unpacked.fileName,
+      code: unpacked.detectedMainCode,
+      lineCount: unpacked.detectedMainCode.split('\n').length,
+      fileList: unpacked.fileList,
+    });
+    setNewGamePrompt(
+      `Port and upgrade this SPCK/Node.js game: ${unpacked.suggestedTitle}. Add glowing neon graphics, particle effects, boss battles, and mobile arcade controls.`
+    );
+    setActiveTab('generator');
+    soundEngine.playSfx('open');
+    if (onShowToast) {
+      onShowToast('Source Attached', `Attached code from ${unpacked.fileName} to Synthesizer!`, 'info');
     }
   };
 
@@ -1754,13 +2159,13 @@ Return ONLY the code within \`\`\`javascript ... \`\`\`.`,
         </div>
 
         {/* Navigation Tabs */}
-        <div className="flex items-center gap-1 bg-slate-800/60 p-1 rounded-lg border border-white/10">
+        <div className="flex items-center gap-1 bg-slate-800/60 p-1 rounded-lg border border-white/10 overflow-x-auto max-w-[65vw]">
           <button
             onClick={() => {
               soundEngine.playSfx('click');
               setActiveTab('play');
             }}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all shrink-0 ${
               activeTab === 'play'
                 ? 'bg-gradient-to-r from-pink-500 to-rose-600 text-white shadow'
                 : 'text-slate-300 hover:text-white hover:bg-white/5'
@@ -1774,47 +2179,127 @@ Return ONLY the code within \`\`\`javascript ... \`\`\`.`,
               soundEngine.playSfx('click');
               setActiveTab('code');
             }}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all shrink-0 ${
               activeTab === 'code'
                 ? 'bg-gradient-to-r from-purple-500 to-indigo-600 text-white shadow'
                 : 'text-slate-300 hover:text-white hover:bg-white/5'
             }`}
           >
             <Code2 className="w-3.5 h-3.5" />
-            Code & Upgrade
+            Code & Mod
+          </button>
+          <button
+            onClick={() => {
+              soundEngine.playSfx('click');
+              setActiveTab('sprites');
+            }}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all shrink-0 ${
+              activeTab === 'sprites'
+                ? 'bg-gradient-to-r from-fuchsia-500 to-pink-600 text-white shadow'
+                : 'text-slate-300 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Paintbrush className="w-3.5 h-3.5" />
+            Sprite Forge
+          </button>
+          <button
+            onClick={() => {
+              soundEngine.playSfx('click');
+              setActiveTab('tilemap');
+            }}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all shrink-0 ${
+              activeTab === 'tilemap'
+                ? 'bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow'
+                : 'text-slate-300 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Box className="w-3.5 h-3.5" />
+            Tilemap Level
+          </button>
+          <button
+            onClick={() => {
+              soundEngine.playSfx('click');
+              setActiveTab('sfx');
+            }}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all shrink-0 ${
+              activeTab === 'sfx'
+                ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow'
+                : 'text-slate-300 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Music className="w-3.5 h-3.5" />
+            SFX Synth
+          </button>
+          <button
+            onClick={() => {
+              soundEngine.playSfx('click');
+              setActiveTab('particles');
+            }}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all shrink-0 ${
+              activeTab === 'particles'
+                ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow'
+                : 'text-slate-300 hover:text-white hover:bg-white/5'
+            }`}
+          >
+            <Flame className="w-3.5 h-3.5" />
+            Particle FX
           </button>
           <button
             onClick={() => {
               soundEngine.playSfx('click');
               setActiveTab('library');
             }}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all shrink-0 ${
               activeTab === 'library'
-                ? 'bg-gradient-to-r from-blue-500 to-cyan-600 text-white shadow'
+                ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow'
                 : 'text-slate-300 hover:text-white hover:bg-white/5'
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            Game Library
+            Library
           </button>
           <button
             onClick={() => {
               soundEngine.playSfx('click');
               setActiveTab('generator');
             }}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-medium transition-all ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-all shrink-0 ${
               activeTab === 'generator'
-                ? 'bg-gradient-to-r from-amber-500 to-orange-600 text-white shadow'
+                ? 'bg-gradient-to-r from-rose-500 to-pink-600 text-white shadow'
                 : 'text-slate-300 hover:text-white hover:bg-white/5'
             }`}
           >
             <Wand2 className="w-3.5 h-3.5" />
-            AI Generator
+            AI Gen
           </button>
         </div>
 
         {/* Global Toolbar buttons */}
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              soundEngine.playSfx('open');
+              setShowUploadModal(true);
+            }}
+            title="Import & Unpack Game (.ZIP / .JS / .HTML)"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-pink-500/20 hover:bg-pink-500/30 text-pink-300 border border-pink-500/40 text-xs font-semibold shadow-sm transition-colors"
+          >
+            <FileArchive className="w-3.5 h-3.5 text-pink-400" />
+            Unpack ZIP
+          </button>
+          <button
+            onClick={handleExportZip}
+            disabled={isExportingZip}
+            title="Export Standalone ZIP Bundle (with runner & package.json)"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800 border border-white/10 text-xs text-slate-200 hover:bg-slate-700 transition-colors"
+          >
+            {isExportingZip ? (
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Package className="w-3.5 h-3.5 text-amber-400" />
+            )}
+            Export ZIP
+          </button>
           <button
             onClick={() => setCrtEffect(!crtEffect)}
             title="Toggle CRT Scanline Effect"
@@ -2099,68 +2584,111 @@ Return ONLY the code within \`\`\`javascript ... \`\`\`.`,
               </div>
             </div>
 
-            {/* Right: Quick Game Info & Fast Upgrades */}
+            {/* Right: Quick Game Info, Fast Upgrades & Live Debugger */}
             <div className="w-full md:w-80 flex flex-col gap-3 shrink-0">
-              {/* Controls card */}
-              <div className="bg-slate-900/90 border border-white/10 rounded-xl p-4 shadow-sm">
-                <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <Terminal className="w-3.5 h-3.5 text-pink-400" />
-                  Key Bindings & Controls
-                </h4>
-                <div className="space-y-1.5 font-mono text-xs">
-                  {currentGame.controlsLegend.map((c, i) => (
-                    <div key={i} className="flex items-center justify-between bg-slate-950/60 px-2 py-1 rounded border border-white/5">
-                      <span className="text-pink-300 font-bold">{c.key}</span>
-                      <span className="text-slate-400 text-[11px]">{c.action}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Upgrades Applied */}
-              <div className="bg-slate-900/90 border border-white/10 rounded-xl p-4 shadow-sm">
-                <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <Zap className="w-3.5 h-3.5 text-amber-400" />
-                  Active Game Mods ({currentGame.upgradesApplied.length})
-                </h4>
-                <div className="flex flex-wrap gap-1.5">
-                  {currentGame.upgradesApplied.map((upg, i) => (
-                    <span key={i} className="px-2 py-1 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[11px] font-medium flex items-center gap-1">
-                      <Sparkles className="w-3 h-3" />
-                      {upg}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {/* 1-Click Upgrade Badges */}
-              <div className="bg-slate-900/90 border border-white/10 rounded-xl p-4 shadow-sm">
-                <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-                  Instant AI Upgrade Recipes
-                </h4>
-                <p className="text-[11px] text-slate-400 mb-2.5">Click any upgrade to modify game physics & features:</p>
-                <div className="space-y-1.5">
-                  {UPGRADE_RECIPES.slice(0, 4).map((rec) => (
-                    <button
-                      key={rec.id}
-                      disabled={isUpgrading}
-                      onClick={() => handleUpgradeCode(rec.prompt)}
-                      className="w-full text-left p-2 rounded-lg bg-slate-800/70 hover:bg-slate-800 border border-white/5 hover:border-pink-500/30 transition-all text-xs group"
-                    >
-                      <div className="font-semibold text-slate-200 group-hover:text-pink-300 transition-colors">{rec.title}</div>
-                      <div className="text-[10px] text-slate-400 line-clamp-1">{rec.desc}</div>
-                    </button>
-                  ))}
-                </div>
+              {/* Segmented Switcher */}
+              <div className="flex items-center gap-1 bg-slate-900/90 p-1 rounded-xl border border-white/10 shadow-sm">
                 <button
-                  onClick={() => setActiveTab('code')}
-                  className="w-full mt-2.5 py-1.5 rounded-lg bg-purple-600/30 hover:bg-purple-600/40 text-purple-300 border border-purple-500/30 text-xs font-medium text-center transition-colors flex items-center justify-center gap-1"
+                  onClick={() => {
+                    setRightPanelTab('controls');
+                    soundEngine.playSfx('click');
+                  }}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition ${
+                    rightPanelTab === 'controls'
+                      ? 'bg-slate-800 text-white shadow border border-white/10'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
                 >
-                  <Code2 className="w-3.5 h-3.5" />
-                  Open Full Upgrade & Code Studio
+                  Controls & Mods
+                </button>
+                <button
+                  onClick={() => {
+                    setRightPanelTab('debug');
+                    soundEngine.playSfx('click');
+                  }}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
+                    rightPanelTab === 'debug'
+                      ? 'bg-rose-950/60 text-rose-300 shadow border border-rose-500/40'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <Bug className="w-3.5 h-3.5 text-rose-400" />
+                  Debug & REPL
                 </button>
               </div>
+
+              {rightPanelTab === 'debug' ? (
+                <DebugInspector
+                  debugState={debugState}
+                  onUpdateDebugState={setDebugState}
+                  onStepFrame={handleStepFrame}
+                  engineRef={engineRef}
+                  onShowToast={onShowToast}
+                />
+              ) : (
+                <>
+                  {/* Controls card */}
+                  <div className="bg-slate-900/90 border border-white/10 rounded-xl p-4 shadow-sm">
+                    <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <Terminal className="w-3.5 h-3.5 text-pink-400" />
+                      Key Bindings & Controls
+                    </h4>
+                    <div className="space-y-1.5 font-mono text-xs">
+                      {currentGame.controlsLegend.map((c, i) => (
+                        <div key={i} className="flex items-center justify-between bg-slate-950/60 px-2 py-1 rounded border border-white/5">
+                          <span className="text-pink-300 font-bold">{c.key}</span>
+                          <span className="text-slate-400 text-[11px]">{c.action}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Upgrades Applied */}
+                  <div className="bg-slate-900/90 border border-white/10 rounded-xl p-4 shadow-sm">
+                    <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5 text-amber-400" />
+                      Active Game Mods ({currentGame.upgradesApplied.length})
+                    </h4>
+                    <div className="flex flex-wrap gap-1.5">
+                      {currentGame.upgradesApplied.map((upg, i) => (
+                        <span key={i} className="px-2 py-1 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[11px] font-medium flex items-center gap-1">
+                          <Sparkles className="w-3 h-3" />
+                          {upg}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 1-Click Upgrade Badges */}
+                  <div className="bg-slate-900/90 border border-white/10 rounded-xl p-4 shadow-sm">
+                    <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-purple-400" />
+                      Instant AI Upgrade Recipes
+                    </h4>
+                    <p className="text-[11px] text-slate-400 mb-2.5">Click any upgrade to modify game physics & features:</p>
+                    <div className="space-y-1.5">
+                      {UPGRADE_RECIPES.slice(0, 4).map((rec) => (
+                        <button
+                          key={rec.id}
+                          disabled={isUpgrading}
+                          onClick={() => handleUpgradeCode(rec.prompt)}
+                          className="w-full text-left p-2 rounded-lg bg-slate-800/70 hover:bg-slate-800 border border-white/5 hover:border-pink-500/30 transition-all text-xs group"
+                        >
+                          <div className="font-semibold text-slate-200 group-hover:text-pink-300 transition-colors">{rec.title}</div>
+                          <div className="text-[10px] text-slate-400 line-clamp-1">{rec.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => setActiveTab('code')}
+                      className="w-full mt-2.5 py-1.5 rounded-lg bg-purple-600/30 hover:bg-purple-600/40 text-purple-300 border border-purple-500/30 text-xs font-medium text-center transition-colors flex items-center justify-center gap-1"
+                    >
+                      <Code2 className="w-3.5 h-3.5" />
+                      Open Full Upgrade & Code Studio
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -2402,7 +2930,43 @@ Return ONLY the code within \`\`\`javascript ... \`\`\`.`,
           </div>
         )}
 
-        {/* TAB 3: GAME LIBRARY */}
+        {/* TAB: SPRITE FORGE & PIXEL ANIMATOR */}
+        {activeTab === 'sprites' && (
+          <SpriteEditor
+            sprites={sprites}
+            onUpdateSprites={setSprites}
+            onInjectSpriteToGame={handleInjectSpriteToGame}
+          />
+        )}
+
+        {/* TAB: TILEMAP & LEVEL FORGE */}
+        {activeTab === 'tilemap' && (
+          <TilemapEditor
+            tilemap={tilemap}
+            onUpdateTilemap={setTilemap}
+            onApplyTilemapToGame={handleApplyTilemapToGame}
+          />
+        )}
+
+        {/* TAB: SFX SYNTHESIZER FORGE */}
+        {activeTab === 'sfx' && (
+          <SfxStudio
+            sfxList={sfxList}
+            onUpdateSfxList={setSfxList}
+            onInjectSfxToGame={handleInjectSfxToGame}
+          />
+        )}
+
+        {/* TAB: PARTICLE EMITTER FORGE */}
+        {activeTab === 'particles' && (
+          <ParticleDesigner
+            emitters={emitters}
+            onUpdateEmitters={setEmitters}
+            onInjectEmitterToGame={handleInjectEmitterToGame}
+          />
+        )}
+
+        {/* TAB: GAME LIBRARY */}
         {activeTab === 'library' && (
           <div className="flex-1 p-6 overflow-y-auto bg-slate-950">
             <div className="max-w-5xl mx-auto">
@@ -2473,6 +3037,37 @@ Return ONLY the code within \`\`\`javascript ... \`\`\`.`,
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
+                              const newMiniApp: MiniAppDefinition = {
+                                id: g.id,
+                                title: g.title,
+                                shortTitle: g.title.slice(0, 16),
+                                version: g.version || '1.0.0',
+                                genre: g.genre === 'Shooter' ? 'Shooter' : 'Custom',
+                                icon: 'Gamepad2',
+                                color: 'from-amber-400 via-orange-500 to-rose-600',
+                                description: g.description,
+                                code: g.code,
+                                upgradesApplied: g.upgradesApplied || ['Playground Studio Library'],
+                                createdAt: new Date().toISOString(),
+                                updatedAt: new Date().toISOString(),
+                                isPinnedToDesktop: true,
+                                tags: g.tags || ['Arcade'],
+                              };
+                              saveMiniApp(newMiniApp);
+                              setActiveMiniAppId(g.id);
+                              if (onShowToast) {
+                                onShowToast('Mini App Ready', `Pinned "${g.title}" to Desktop & Mini Apps Hub.`, 'success');
+                              }
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-semibold flex items-center gap-1"
+                            title="Run or Pin as Mini App"
+                          >
+                            <Layers className="w-3 h-3 text-amber-400" />
+                            Mini App
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
                               setSelectedGameId(g.id);
                               setActiveTab('play');
                             }}
@@ -2501,9 +3096,174 @@ Return ONLY the code within \`\`\`javascript ... \`\`\`.`,
                 </div>
                 <div>
                   <h3 className="text-lg font-bold text-white">Prompt-to-Game Synthesizer</h3>
-                  <p className="text-xs text-slate-400">Describe any concept, mechanics, or game genre to generate runnable code</p>
+                  <p className="text-xs text-slate-400">Describe any concept, mechanics, or upload game code (.zip, .js, .html) to synthesize or mod</p>
                 </div>
               </div>
+
+              {/* Upload & Attached Code Zone */}
+              <input
+                ref={generatorFileInputRef}
+                type="file"
+                accept=".zip,.js,.ts,.html,.json"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  if (file.name.toLowerCase().endsWith('.zip')) {
+                    try {
+                      const res = await unpackGameZip(file);
+                      handleSendToSynthesizer(res);
+                    } catch (err) {
+                      if (onShowToast) onShowToast('Unpack Error', 'Failed to read zip', 'warn');
+                    }
+                  } else {
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                      const code = (ev.target?.result as string) || '';
+                      setAttachedSourceCode({
+                        fileName: file.name,
+                        code,
+                        lineCount: code.split('\n').length,
+                      });
+                      if (!newGamePrompt.trim() || newGamePrompt.startsWith('Create a retro')) {
+                        setNewGamePrompt(`Modernize and upgrade this game (${file.name}): enhance graphics, add sound FX, and arcade controls.`);
+                      }
+                      if (onShowToast) onShowToast('File Attached', `Loaded ${file.name} into synthesizer context`, 'success');
+                    };
+                    reader.readAsText(file);
+                  }
+                  e.target.value = '';
+                }}
+                className="hidden"
+              />
+
+              {attachedSourceCode ? (
+                <div className="mb-4 bg-purple-950/40 border border-purple-500/40 rounded-xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-purple-500/20 text-purple-300 flex items-center justify-center border border-purple-500/30 shrink-0">
+                      <FileArchive className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-white">{attachedSourceCode.fileName}</span>
+                        <span className="text-[10px] font-mono text-purple-300 bg-purple-500/20 px-1.5 py-0.5 rounded border border-purple-500/30">
+                          {attachedSourceCode.lineCount} lines
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-300">
+                        Source code attached. AI Synthesizer will reference and upgrade this logic.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const template = adaptCodeToPlaygroundEngine(
+                          attachedSourceCode.code,
+                          attachedSourceCode.fileName.replace(/\.[^/.]+$/, '')
+                        );
+                        handleImportGame({
+                          id: `imported-${Date.now().toString(36)}`,
+                          title: attachedSourceCode.fileName.replace(/\.[^/.]+$/, ''),
+                          genre: 'Custom',
+                          description: `Directly imported from ${attachedSourceCode.fileName}`,
+                          version: '1.0.0',
+                          upgradesApplied: ['Direct Source Import'],
+                          tags: ['Imported', 'Custom'],
+                          controlsLegend: [
+                            { key: 'Arrows / WASD', action: 'Move' },
+                            { key: 'SPACE or [A]', action: 'Action' },
+                          ],
+                          params: {
+                            playerSpeed: 1.2,
+                            difficulty: 1.0,
+                            lives: 3,
+                            fireRate: 1.0,
+                            particleDensity: 'high',
+                            colorTheme: 'cyber-neon',
+                            screenShake: true,
+                          },
+                          code: template,
+                        }, 'play');
+                      }}
+                      className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow-sm transition-colors"
+                      title="Play without AI generation"
+                    >
+                      <Play className="w-3 h-3 fill-white" />
+                      Direct Play
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const template = adaptCodeToPlaygroundEngine(
+                          attachedSourceCode.code,
+                          attachedSourceCode.fileName.replace(/\.[^/.]+$/, '')
+                        );
+                        const title = attachedSourceCode.fileName.replace(/\.[^/.]+$/, '');
+                        const newMiniApp: MiniAppDefinition = {
+                          id: `spck-${Date.now().toString(36)}`,
+                          title,
+                          shortTitle: title.slice(0, 16),
+                          version: '1.0.0',
+                          genre: 'SPCK Port',
+                          icon: 'Gamepad2',
+                          color: 'from-amber-400 via-orange-500 to-rose-600',
+                          description: `Imported from ${attachedSourceCode.fileName}. Standalone Mini App ready for upgrades.`,
+                          code: template,
+                          upgradesApplied: ['Synthesizer Source Import'],
+                          createdAt: new Date().toISOString(),
+                          updatedAt: new Date().toISOString(),
+                          isPinnedToDesktop: true,
+                          tags: ['SPCK Port', 'Mini App'],
+                        };
+                        saveMiniApp(newMiniApp);
+                        setActiveMiniAppId(newMiniApp.id);
+                        if (onShowToast) {
+                          onShowToast('Mini App Deployed!', `Pinned "${title}" to Desktop & Mini Apps Hub.`, 'success');
+                        }
+                      }}
+                      className="px-2.5 py-1.5 bg-gradient-to-r from-amber-500 to-rose-500 hover:from-amber-600 hover:to-rose-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1 shadow-sm transition-colors"
+                      title="Deploy as standalone Mini App pinned to Desktop"
+                    >
+                      <Layers className="w-3 h-3 text-white" />
+                      Deploy as Mini App
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAttachedSourceCode(null)}
+                      className="px-2 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-lg text-xs transition-colors"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  onClick={() => generatorFileInputRef.current?.click()}
+                  className="mb-4 p-3 bg-slate-950/70 hover:bg-slate-950 border border-dashed border-white/20 hover:border-pink-500/50 rounded-xl flex items-center justify-between cursor-pointer transition-all group"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-7 h-7 rounded-lg bg-pink-500/10 text-pink-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+                      <UploadCloud className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-semibold text-slate-200 group-hover:text-pink-300 transition-colors">
+                        Attach Game File or ZIP (.zip, .js, .html)
+                      </div>
+                      <div className="text-[10px] text-slate-400">
+                        Upload SPCK Node.js or web games to synthesize, unpack, or upgrade
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="px-2.5 py-1 rounded bg-slate-800 group-hover:bg-pink-600 text-[11px] font-medium text-slate-300 group-hover:text-white transition-colors"
+                  >
+                    Select File / ZIP
+                  </button>
+                </div>
+              )}
 
               <div className="mb-4">
                 <label className="block text-xs font-medium text-slate-300 mb-1.5">Game Concept & Rules:</label>
@@ -2551,7 +3311,7 @@ Return ONLY the code within \`\`\`javascript ... \`\`\`.`,
                 ) : (
                   <>
                     <Sparkles className="w-4 h-4" />
-                    Forge Playable Game
+                    {attachedSourceCode ? 'Upgrade & Forge Attached Game' : 'Forge Playable Game'}
                   </>
                 )}
               </button>
@@ -2559,6 +3319,15 @@ Return ONLY the code within \`\`\`javascript ... \`\`\`.`,
           </div>
         )}
       </div>
+
+      {/* Game Upload & ZIP Unpacker Modal */}
+      <GameUploadModal
+        isOpen={showUploadModal}
+        onClose={() => setShowUploadModal(false)}
+        onImportGame={handleImportGame}
+        onSendToSynthesizer={handleSendToSynthesizer}
+        onShowToast={onShowToast}
+      />
 
       {/* Bottom Footer Status Bar */}
       <footer className="h-7 bg-slate-900 border-t border-white/10 px-4 flex items-center justify-between text-[11px] text-slate-400 font-mono shrink-0">

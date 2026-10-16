@@ -38,6 +38,9 @@ import {
   BookmarkPlus,
   Trash2,
   X,
+  Eye,
+  EyeOff,
+  Monitor,
   Gauge,
   Circle,
   Radio,
@@ -236,6 +239,80 @@ const createDefaultMusicTracks = (): TrackSequence[] => [
   },
 ];
 
+const drawSimulatedMotionFrame = (
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  time: number
+) => {
+  const t = time * 0.0015;
+  // Cyber dark gradient background
+  const grad = ctx.createLinearGradient(0, 0, width, height);
+  grad.addColorStop(0, '#0a0219');
+  grad.addColorStop(0.5, '#1e0538');
+  grad.addColorStop(1, '#05010a');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, width, height);
+
+  // Moving perspective synthwave floor grid
+  ctx.strokeStyle = 'rgba(236, 72, 153, 0.45)';
+  ctx.lineWidth = 1.5;
+  const horizon = height * 0.52;
+  const numV = 12;
+  for (let i = 0; i <= numV; i++) {
+    const x = (i / numV) * width;
+    ctx.beginPath();
+    ctx.moveTo(width * 0.5, horizon);
+    ctx.lineTo(x * 2.2 - width * 0.6, height);
+    ctx.stroke();
+  }
+
+  // Horizontal moving lines
+  for (let i = 1; i <= 7; i++) {
+    const progress = (t * 0.7 + i / 7) % 1;
+    const y = horizon + Math.pow(progress, 2.2) * (height - horizon);
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+
+  // Glowing cyber sun / sphere
+  const cx = width * 0.5;
+  const cy = height * 0.36 + Math.sin(t * 2) * 6;
+  const radius = 34 + Math.sin(t * 3) * 4;
+
+  const sunGrad = ctx.createRadialGradient(cx, cy, 4, cx, cy, radius);
+  sunGrad.addColorStop(0, '#ffffff');
+  sunGrad.addColorStop(0.3, '#f43f5e');
+  sunGrad.addColorStop(0.8, '#e11d48');
+  sunGrad.addColorStop(1, '#881337');
+  ctx.fillStyle = sunGrad;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Orbiting digital rings
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = '#38bdf8';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, radius * 1.5, radius * 0.45, t * 1.4, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.strokeStyle = '#c084fc';
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, radius * 1.3, radius * 0.35, -t * 1.1, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // On-screen HUD readout
+  ctx.fillStyle = '#10b981';
+  ctx.font = 'bold 10px monospace';
+  ctx.fillText('LIVE VIRTUAL CAM // 30 FPS', 12, 22);
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '9px monospace';
+  ctx.fillText(`FRAME: ${Math.floor(t * 30)}  AUDIO: SYNC`, 12, 35);
+};
+
 interface PresetThumbnailPreviewProps {
   preset: ArtPreset;
   sourceCanvasRef: React.RefObject<HTMLCanvasElement | null>;
@@ -431,6 +508,12 @@ export const AsciiApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
   const [targetFps, setTargetFps] = useState<number>(24);
   const [measuredFps, setMeasuredFps] = useState<number>(0);
   const [webcamError, setWebcamError] = useState<string | null>(null);
+  const [showWebcamPip, setShowWebcamPip] = useState<boolean>(true);
+  const [isSimulatedFeed, setIsSimulatedFeed] = useState<boolean>(false);
+  const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string>('');
+  const simCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pipCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   // -------------------------------------------------------------
   // AUDIO FREQUENCY ANALYZER & REACTIVE PULSING STATE (MusicFX)
@@ -1021,44 +1104,107 @@ export const AsciiApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
     processFrameToAscii,
   ]);
 
-  // Start Webcam Stream
-  const startWebcam = async () => {
+  // Refresh camera devices
+  const refreshCameraDevices = async () => {
+    try {
+      if (navigator.mediaDevices?.enumerateDevices) {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevs = devices.filter((d) => d.kind === 'videoinput');
+        setAvailableCameras(videoDevs);
+      }
+    } catch (e) {
+      // ignore
+    }
+  };
+
+  // Start Webcam Stream with resilient fallback to Virtual Cyber Cam
+  const startWebcam = async (deviceId?: string, autoFallback: boolean = true) => {
     setWebcamError(null);
+    setIsSimulatedFeed(false);
     try {
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          facingMode: 'user',
-        },
-        audio: false,
-      });
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Webcam mediaDevices API is not supported in this browser environment.');
+      }
 
+      const constraints: MediaStreamConstraints = {
+        video: deviceId
+          ? { deviceId: { exact: deviceId } }
+          : {
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+              facingMode: 'user',
+            },
+        audio: false,
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       mediaStreamRef.current = stream;
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        videoRef.current.autoplay = true;
+        videoRef.current.playsInline = true;
+        videoRef.current.muted = true;
+        await videoRef.current.play().catch(() => {});
       }
 
       setIsWebcamActive(true);
       setIsWebcamPaused(false);
       setSourceMode('webcam');
+      if (deviceId) setSelectedCameraId(deviceId);
+      refreshCameraDevices();
+
       soundEngine.playSfx('success');
-      if (onShowToast) onShowToast('Webcam Live', 'Streaming dynamic live video into ASCII converter!');
+      if (onShowToast) onShowToast('Webcam Live', 'Streaming dynamic live video directly into ASCII converter!');
     } catch (err: any) {
-      console.error('Webcam initialization error:', err);
-      const errMsg =
-        err.name === 'NotAllowedError'
-          ? 'Camera access denied by browser permissions.'
-          : err.name === 'NotFoundError'
-          ? 'No camera device found on system.'
-          : 'Failed to access camera device.';
+      console.warn('Webcam initialization notice:', err);
+      const isPermissionRestricted =
+        err.name === 'NotAllowedError' ||
+        err.name === 'SecurityError' ||
+        (err.message && err.message.toLowerCase().includes('not allowed'));
+
+      const errMsg = isPermissionRestricted
+        ? 'Camera permission is restricted by user agent/iframe context. Switched to high-speed Virtual Cyber Cam feed.'
+        : err.name === 'NotFoundError'
+        ? 'No physical camera detected on system. Switched to Virtual Cyber Cam feed.'
+        : err.message || 'Camera device unavailable. Switched to Virtual Cyber Cam feed.';
+
       setWebcamError(errMsg);
-      if (onShowToast) onShowToast('Camera Error', errMsg);
+
+      if (autoFallback) {
+        // Automatically start the virtual feed so real-time dynamic ASCII video continues seamlessly!
+        startSimulatedFeed(false);
+        if (onShowToast) {
+          onShowToast('Virtual Cam Active', isPermissionRestricted ? 'Camera restricted: Switched to Virtual Cyber Cam stream.' : errMsg);
+        }
+      } else {
+        if (onShowToast) onShowToast('Camera Notice', errMsg);
+      }
+    }
+  };
+
+  // Start Simulated Virtual Cyber Camera Feed
+  const startSimulatedFeed = (playSoundParam?: boolean | React.MouseEvent) => {
+    const playSound = typeof playSoundParam === 'boolean' ? playSoundParam : true;
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsSimulatedFeed(true);
+    setIsWebcamActive(true);
+    setIsWebcamPaused(false);
+    setSourceMode('webcam');
+    if (playSound) soundEngine.playSfx('success');
+    if (playSound && onShowToast) {
+      onShowToast('Virtual Cam Active', 'Streaming dynamic cyber-motion loop directly into ASCII converter!');
     }
   };
 
@@ -1077,6 +1223,7 @@ export const AsciiApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
     }
     setIsWebcamActive(false);
     setIsWebcamPaused(false);
+    setIsSimulatedFeed(false);
     setMeasuredFps(0);
     soundEngine.playSfx('click');
   }, []);
@@ -1116,7 +1263,28 @@ export const AsciiApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
       if (elapsed >= intervalMs) {
         lastFrameTimeRef.current = timestamp - (elapsed % intervalMs);
 
-        if (videoRef.current && videoRef.current.readyState >= 2) {
+        if (isSimulatedFeed) {
+          if (!simCanvasRef.current) {
+            simCanvasRef.current = document.createElement('canvas');
+            simCanvasRef.current.width = 320;
+            simCanvasRef.current.height = 240;
+          }
+          const sCanvas = simCanvasRef.current;
+          const sCtx = sCanvas.getContext('2d');
+          if (sCtx) {
+            drawSimulatedMotionFrame(sCtx, sCanvas.width, sCanvas.height, timestamp);
+            const currentAudio = isAudioReactive ? flowAudioEngine.getAudioAnalysis() : undefined;
+            processFrameToAscii(sCanvas as unknown as HTMLImageElement, currentAudio);
+            frameCountRef.current += 1;
+
+            if (pipCanvasRef.current) {
+              const pCtx = pipCanvasRef.current.getContext('2d');
+              if (pCtx) {
+                pCtx.drawImage(sCanvas, 0, 0, pipCanvasRef.current.width, pipCanvasRef.current.height);
+              }
+            }
+          }
+        } else if (videoRef.current && (videoRef.current.readyState >= 2 || videoRef.current.videoWidth > 0)) {
           const currentAudio = isAudioReactive ? flowAudioEngine.getAudioAnalysis() : undefined;
           processFrameToAscii(videoRef.current, currentAudio);
           frameCountRef.current += 1;
@@ -1143,10 +1311,27 @@ export const AsciiApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
         animationFrameIdRef.current = null;
       }
     };
-  }, [sourceMode, isWebcamActive, isWebcamPaused, targetFps, processFrameToAscii, isAudioReactive]);
+  }, [
+    sourceMode,
+    isWebcamActive,
+    isWebcamPaused,
+    targetFps,
+    processFrameToAscii,
+    isAudioReactive,
+    isSimulatedFeed,
+  ]);
 
   // Snapshot current webcam frame and freeze into Image mode
   const handleCaptureSnapshot = () => {
+    if (isSimulatedFeed && simCanvasRef.current) {
+      const dataUrl = simCanvasRef.current.toDataURL('image/png');
+      setImageSrc(dataUrl);
+      setSourceMode('image');
+      stopWebcam();
+      soundEngine.playSfx('success');
+      if (onShowToast) onShowToast('Snapshot Captured', 'Frozen virtual frame loaded into Image mode.');
+      return;
+    }
     if (!videoRef.current || !canvasRef.current) return;
     const canvas = canvasRef.current;
     const dataUrl = canvas.toDataURL('image/png');
@@ -1154,7 +1339,7 @@ export const AsciiApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
     setSourceMode('image');
     stopWebcam();
     soundEngine.playSfx('success');
-    if (onShowToast) onShowToast('Snapshot Captured', 'Frozen frame loaded into Image mode.');
+    if (onShowToast) onShowToast('Snapshot Captured', 'Frozen camera frame loaded into Image mode.');
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1636,28 +1821,50 @@ export const AsciiApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
                   <Video className="w-3.5 h-3.5 text-rose-400" /> Live Webcam Feed
                 </label>
                 {isWebcamActive && (
-                  <span className="flex items-center gap-1 text-[10px] text-rose-400 font-mono">
+                  <span className="flex items-center gap-1 text-[10px] text-rose-400 font-mono font-bold">
                     <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping inline-block" />
-                    {isWebcamPaused ? 'PAUSED' : 'LIVE'}
+                    {isWebcamPaused ? 'PAUSED' : isSimulatedFeed ? 'VIRTUAL' : 'LIVE'}
                   </span>
                 )}
               </div>
 
               {webcamError && (
-                <div className="text-[11px] p-2 rounded bg-rose-950/60 border border-rose-500/40 text-rose-200">
-                  {webcamError}
+                <div className="text-[11px] p-2.5 rounded-lg bg-rose-950/70 border border-rose-500/50 text-rose-200 space-y-2">
+                  <div className="leading-snug">{webcamError}</div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={startSimulatedFeed}
+                      className="px-2.5 py-1 rounded-md bg-purple-600 hover:bg-purple-500 text-white font-semibold text-[10px] flex items-center gap-1 transition"
+                    >
+                      <Sparkles className="w-3 h-3" /> Launch Virtual Cam Loop
+                    </button>
+                    <button
+                      onClick={() => startWebcam()}
+                      className="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 text-[10px] transition"
+                    >
+                      Retry Camera
+                    </button>
+                  </div>
                 </div>
               )}
 
               {/* Webcam Video Preview & Action Buttons */}
               <div className="grid grid-cols-2 gap-2">
                 {!isWebcamActive ? (
-                  <button
-                    onClick={startWebcam}
-                    className="col-span-2 py-2 px-3 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-rose-600/30 transition"
-                  >
-                    <Video className="w-4 h-4" /> Start Live Camera
-                  </button>
+                  <>
+                    <button
+                      onClick={() => startWebcam()}
+                      className="col-span-2 py-2 px-3 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-rose-600/30 transition"
+                    >
+                      <Video className="w-4 h-4" /> Start Live Camera
+                    </button>
+                    <button
+                      onClick={startSimulatedFeed}
+                      className="col-span-2 py-1.5 px-3 rounded-lg bg-purple-900/40 hover:bg-purple-900/70 border border-purple-500/40 text-purple-200 hover:text-white font-medium text-xs flex items-center justify-center gap-2 transition"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-fuchsia-400" /> Test with Virtual Cam Feed
+                    </button>
+                  </>
                 ) : (
                   <>
                     <button
@@ -1696,6 +1903,24 @@ export const AsciiApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
                 )}
               </div>
 
+              {/* Camera Hardware Switcher if multiple devices */}
+              {availableCameras.length > 1 && (
+                <div>
+                  <label className="text-[11px] text-slate-400 block mb-1">Select Camera Device</label>
+                  <select
+                    value={selectedCameraId}
+                    onChange={(e) => startWebcam(e.target.value)}
+                    className="w-full bg-slate-900 border border-purple-500/30 rounded-lg p-1.5 text-[11px] text-slate-200 focus:outline-none"
+                  >
+                    {availableCameras.map((dev, i) => (
+                      <option key={dev.deviceId || i} value={dev.deviceId}>
+                        {dev.label || `Camera ${i + 1}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {/* Framerate Selection */}
               <div>
                 <div className="flex justify-between text-[11px] text-slate-300 mb-1">
@@ -1718,6 +1943,23 @@ export const AsciiApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
                   ))}
                 </div>
               </div>
+
+              {/* Picture-in-Picture Toggle */}
+              {isWebcamActive && (
+                <div className="pt-1">
+                  <button
+                    onClick={() => setShowWebcamPip(!showWebcamPip)}
+                    className={`w-full py-1.5 px-2 rounded-lg border text-xs flex items-center justify-center gap-1.5 transition ${
+                      showWebcamPip
+                        ? 'bg-rose-950/40 border-rose-500/40 text-rose-200'
+                        : 'bg-black/40 border-purple-500/20 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {showWebcamPip ? <Eye className="w-3.5 h-3.5 text-rose-400" /> : <EyeOff className="w-3.5 h-3.5" />}
+                    <span>Camera Monitor PiP: {showWebcamPip ? 'Visible' : 'Hidden'}</span>
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -2110,9 +2352,102 @@ export const AsciiApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
 
         {/* Main ASCII Viewer Area */}
         <div className="flex-1 flex flex-col bg-[#050308] p-4 overflow-hidden relative">
-          {/* Hidden helper elements */}
+          {/* Hidden helper canvas */}
           <canvas ref={canvasRef} className="hidden" />
-          <video ref={videoRef} playsInline muted className="hidden" />
+
+          {/* Picture-in-Picture Floating Camera Monitor / Video Element */}
+          <div
+            className={
+              sourceMode === 'webcam' && isWebcamActive && showWebcamPip
+                ? 'absolute bottom-6 right-6 z-30 w-56 rounded-2xl border border-rose-500/40 bg-black/90 backdrop-blur-md shadow-2xl p-2.5 flex flex-col gap-2 transition-all'
+                : 'fixed -top-[9999px] -left-[9999px] opacity-0 pointer-events-none w-48 h-36'
+            }
+          >
+            <div className="flex items-center justify-between px-1 text-[11px] text-rose-300 font-mono">
+              <div className="flex items-center gap-1.5 font-bold">
+                <Circle className="w-2 h-2 fill-rose-500 animate-pulse" />
+                <span>{isSimulatedFeed ? 'VIRTUAL CAM' : 'RAW CAMERA'}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-slate-400">{measuredFps} FPS</span>
+                <button
+                  onClick={() => setShowWebcamPip(false)}
+                  className="text-slate-400 hover:text-white p-0.5 rounded transition"
+                  title="Minimize camera PiP monitor"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Video or Simulated Canvas Viewport */}
+            <div className="relative aspect-video rounded-xl overflow-hidden bg-slate-950 border border-purple-500/30 shadow-inner">
+              {isSimulatedFeed ? (
+                <canvas
+                  ref={pipCanvasRef}
+                  width={160}
+                  height={120}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <video
+                  ref={videoRef}
+                  playsInline
+                  autoPlay
+                  muted
+                  className={`w-full h-full object-cover ${mirrorWebcam ? 'scale-x-[-1]' : ''}`}
+                />
+              )}
+
+              {/* Cyber Crosshair Target Overlay */}
+              <div className="absolute inset-0 pointer-events-none border border-rose-500/20 flex items-center justify-center">
+                <div className="w-10 h-10 border border-rose-500/40 rounded-lg flex items-center justify-center">
+                  <div className="w-1.5 h-1.5 bg-rose-400 rounded-full" />
+                </div>
+              </div>
+            </div>
+
+            {/* Quick PiP Controls */}
+            <div className="grid grid-cols-3 gap-1 pt-0.5">
+              <button
+                onClick={() => setIsWebcamPaused(!isWebcamPaused)}
+                className="py-1 px-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-[10px] flex items-center justify-center gap-1 text-slate-200 transition"
+                title={isWebcamPaused ? 'Resume video stream' : 'Pause video stream'}
+              >
+                {isWebcamPaused ? <Play className="w-3 h-3 text-emerald-400" /> : <Pause className="w-3 h-3 text-amber-400" />}
+                <span>{isWebcamPaused ? 'Play' : 'Pause'}</span>
+              </button>
+              <button
+                onClick={() => setMirrorWebcam(!mirrorWebcam)}
+                className={`py-1 px-1.5 rounded-lg text-[10px] flex items-center justify-center gap-1 transition ${
+                  mirrorWebcam ? 'bg-purple-600/40 text-purple-200' : 'bg-slate-800 text-slate-300'
+                }`}
+                title="Mirror camera horizontally"
+              >
+                <FlipHorizontal className="w-3 h-3 text-fuchsia-400" />
+                <span>Mirror</span>
+              </button>
+              <button
+                onClick={handleCaptureSnapshot}
+                className="py-1 px-1.5 rounded-lg bg-emerald-600/40 hover:bg-emerald-600/60 text-[10px] flex items-center justify-center gap-1 text-emerald-200 transition"
+                title="Snap current frame into photo mode"
+              >
+                <Camera className="w-3 h-3 text-emerald-400" />
+                <span>Snap</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Collapsed PiP Reopen Button */}
+          {sourceMode === 'webcam' && isWebcamActive && !showWebcamPip && (
+            <button
+              onClick={() => setShowWebcamPip(true)}
+              className="absolute bottom-6 right-6 z-30 px-3.5 py-2 rounded-full bg-black/90 hover:bg-black border border-rose-500/50 backdrop-blur shadow-2xl text-xs text-rose-300 flex items-center gap-2 transition hover:scale-105"
+            >
+              <Monitor className="w-4 h-4 text-rose-400" />
+              <span>Show Camera Monitor ({measuredFps} FPS)</span>
+            </button>
+          )}
 
           {/* Floating Emoji Reactions Overlay */}
           <div className="absolute top-6 right-6 z-30 pointer-events-none flex flex-col-reverse items-end gap-2">
@@ -2134,7 +2469,7 @@ export const AsciiApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
               <div className="absolute top-4 left-4 z-10 flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/80 border border-rose-500/50 backdrop-blur">
                 <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping inline-block" />
                 <span className="text-xs font-mono font-bold text-rose-400 tracking-wider">
-                  LIVE ASCII STREAM
+                  {isSimulatedFeed ? 'VIRTUAL ASCII STREAM' : 'LIVE ASCII WEBCAM'}
                 </span>
                 <span className="text-[11px] font-mono text-slate-300 pl-1 border-l border-rose-500/30">
                   {measuredFps} FPS
@@ -2173,12 +2508,20 @@ export const AsciiApp: React.FC<{ onShowToast?: (title: string, msg: string) => 
                 <p className="text-xs text-slate-400 mb-5 leading-relaxed">
                   Stream your camera in real time directly into the dynamic ASCII matrix converter. Experience live cyberpunk video rasterization!
                 </p>
-                <button
-                  onClick={startWebcam}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-fuchsia-600 hover:from-rose-500 hover:to-fuchsia-500 text-white font-semibold text-xs flex items-center gap-2 mx-auto shadow-lg shadow-rose-600/30 transition transform hover:scale-105"
-                >
-                  <Video className="w-4 h-4" /> Start Live Camera Feed
-                </button>
+                <div className="flex flex-col sm:flex-row justify-center gap-2.5">
+                  <button
+                    onClick={() => startWebcam()}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 to-fuchsia-600 hover:from-rose-500 hover:to-fuchsia-500 text-white font-semibold text-xs flex items-center justify-center gap-2 shadow-lg shadow-rose-600/30 transition transform hover:scale-105"
+                  >
+                    <Video className="w-4 h-4" /> Start Live Camera
+                  </button>
+                  <button
+                    onClick={startSimulatedFeed}
+                    className="px-4 py-2.5 rounded-xl bg-purple-900/40 hover:bg-purple-800/60 border border-purple-500/40 text-purple-200 hover:text-white font-semibold text-xs flex items-center justify-center gap-2 shadow transition"
+                  >
+                    <Sparkles className="w-4 h-4 text-fuchsia-400" /> Virtual Cyber Cam
+                  </button>
+                </div>
               </div>
             )}
 

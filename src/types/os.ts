@@ -11,7 +11,8 @@ export type AppId =
   | 'science'
   | 'brainstormer'
   | 'arcade'
-  | 'ascii';
+  | 'ascii'
+  | 'miniapps';
 
 export interface AppConfig {
   id: AppId;
@@ -22,6 +23,15 @@ export interface AppConfig {
   defaultWidth: number;
   defaultHeight: number;
 }
+
+export type SnapZone =
+  | 'left'
+  | 'right'
+  | 'top'
+  | 'top-left'
+  | 'top-right'
+  | 'bottom-left'
+  | 'bottom-right';
 
 export interface WindowState {
   id: AppId;
@@ -46,6 +56,7 @@ export interface WindowState {
     width: number;
     height: number;
   };
+  snappedZone?: SnapZone | null;
 }
 
 export interface WallpaperPreset {
